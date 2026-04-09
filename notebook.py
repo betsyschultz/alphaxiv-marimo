@@ -59,7 +59,6 @@ def precompute():
     _d_head = _d_model // _n_heads
     _n_layers = _model.config.n_layer
 
-    # ── Forward pass 1: Standard attention + QKV hook ──
     _qkv_cache = {}
     def _capture_qkv(layer_idx):
         def hook_fn(module, input, output):
@@ -79,7 +78,6 @@ def precompute():
 
     _standard_attn = np.stack([_layer[0].numpy() for _layer in _standard_out.attentions])
 
-    # ── Pre-softmax scores (for temperature slider + ReLU analysis) ──
     _causal_mask = torch.tril(torch.ones(_seq_len, _seq_len)).unsqueeze(0).unsqueeze(0)
     _raw_scores_all = []
     for _i in range(_n_layers):
@@ -91,7 +89,6 @@ def precompute():
         _raw_scores_all.append(_scores[0].numpy())
     _raw_scores_all = np.stack(_raw_scores_all)
 
-    # ── ESA: mask diagonal + renormalize ──
     _esa_attn = _standard_attn.copy()
     for _li in range(_n_layers):
         for _hi in range(_n_heads):
@@ -101,13 +98,11 @@ def precompute():
             _rs = np.where(_rs == 0, 1.0, _rs)
             _esa_attn[_li, _hi] = _a / _rs
 
-    # ── Forward pass 2: Sink token ──
     _sink_ids = torch.cat([torch.zeros(1, 1, dtype=torch.long), _inputs["input_ids"]], dim=1)
     with torch.no_grad():
         _sink_out = _model(input_ids=_sink_ids, output_attentions=True)
     _sink_attn_full = np.stack([_layer[0].numpy() for _layer in _sink_out.attentions])
 
-    # ── Entropy + sink magnitude helpers ──
     def _entropy(attn_4d):
         _p = np.clip(attn_4d, 1e-9, 1.0)
         return -(_p * np.log(_p)).sum(axis=-1).mean(axis=-1)
@@ -193,14 +188,31 @@ Every percentage point spent on the sink is a point *not* spent tracking syntax,
 # ============================================================================
 
 @app.cell
-def act2_esa(data, mo, np, plt):
-    _esa_toggle = mo.ui.switch(label="Enable Exclusive Self-Attention", value=False)
+def act2_esa_controls(mo):
+    esa_toggle = mo.ui.switch(label="Enable Exclusive Self-Attention", value=False)
     _head_opts = ["Average (all heads)"] + [f"Head {_i}" for _i in range(12)]
-    _esa_layer = mo.ui.slider(start=0, stop=11, value=8, label="Layer", show_value=True)
-    _esa_head = mo.ui.dropdown(options=_head_opts, value="Average (all heads)", label="Head")
+    esa_layer = mo.ui.slider(start=0, stop=11, value=8, label="Layer", show_value=True)
+    esa_head = mo.ui.dropdown(options=_head_opts, value="Average (all heads)", label="Head")
 
-    _layer = _esa_layer.value
-    _head_val = _esa_head.value
+    mo.output.replace(mo.vstack([
+        mo.md("""
+---
+
+### Does blocking self-attention fix the sink?
+
+One hypothesis: maybe sinks form because tokens attend to themselves too much. [Exclusive Self Attention](https://alphaxiv.org/abs/2503.07822) (Zhai, 2025) blocks the diagonal — each token can look at every other token, but not itself.
+
+Toggle it on and watch what happens to the sink stripe.
+"""),
+        mo.hstack([esa_toggle, esa_layer, esa_head], justify="start", gap=1),
+    ]))
+    return esa_toggle, esa_layer, esa_head
+
+
+@app.cell
+def act2_esa_viz(data, mo, np, plt, esa_toggle, esa_layer, esa_head):
+    _layer = esa_layer.value
+    _head_val = esa_head.value
     _std = data["standard_attn"][_layer]
     _esa = data["esa_attn"][_layer]
 
@@ -214,8 +226,8 @@ def act2_esa(data, mo, np, plt):
         _esa_show = _esa[_hi]
         _hlabel = _head_val
 
-    _right = _esa_show if _esa_toggle.value else _std_show
-    _rtitle = "Exclusive Self-Attention" if _esa_toggle.value else "Standard (toggle ESA above)"
+    _right = _esa_show if esa_toggle.value else _std_show
+    _rtitle = "Exclusive Self-Attention" if esa_toggle.value else "Standard (toggle ESA above)"
     _vmax = max(_std_show.max(), _right.max())
 
     _fig1, _axes = plt.subplots(1, 2, figsize=(12, 5))
@@ -240,16 +252,6 @@ def act2_esa(data, mo, np, plt):
     plt.tight_layout()
 
     mo.output.replace(mo.vstack([
-        mo.md("""
----
-
-### Does blocking self-attention fix the sink?
-
-One hypothesis: maybe sinks form because tokens attend to themselves too much. [Exclusive Self Attention](https://alphaxiv.org/abs/2503.07822) (Zhai, 2025) blocks the diagonal — each token can look at every other token, but not itself.
-
-Toggle it on and watch what happens to the sink stripe.
-"""),
-        mo.hstack([_esa_toggle, _esa_layer, _esa_head], justify="start", gap=1),
         _fig1,
         mo.md("""
 ### Finding: Blocking self-attention doesn't fix the sink
@@ -268,27 +270,50 @@ The two lines below overlap almost perfectly. Blocking self-attention has **no e
 # ============================================================================
 
 @app.cell
-def act3_fixes(data, mo, np, plt):
+def act3_controls(mo):
     temp_slider = mo.ui.slider(start=1.0, stop=5.0, step=0.5, value=3.0, label="Temperature", show_value=True)
-    _fix_radio = mo.ui.radio(
+    fix_radio = mo.ui.radio(
         options=["Standard (baseline)", "Temperature scaling", "Sink token"],
         value="Standard (baseline)",
         label="Attention mode",
     )
     _head_opts = ["Average (all heads)"] + [f"Head {_i}" for _i in range(12)]
-    _fix_layer = mo.ui.slider(start=0, stop=11, value=8, label="Layer", show_value=True)
-    _fix_head = mo.ui.dropdown(options=_head_opts, value="Average (all heads)", label="Head")
+    fix_layer = mo.ui.slider(start=0, stop=11, value=8, label="Layer", show_value=True)
+    fix_head = mo.ui.dropdown(options=_head_opts, value="Average (all heads)", label="Head")
 
-    # Compute temperature-scaled attention on-the-fly (numpy softmax avoids torch reimport)
+    mo.output.replace(mo.vstack([
+        mo.md("""
+---
+
+## What Actually Works
+
+We tested several approaches. Exclusive Self Attention doesn't fix sinks. Elastic softmax has zero effect (softmax is shift-invariant). ReLU attention is more interesting — see below.
+
+Two approaches survive:
+
+**Temperature scaling** divides attention scores by T before softmax. Higher T spreads attention more evenly — the model stops dumping excess onto the first token because it doesn't need to.
+
+**Sink token** prepends a designated garbage token at position 0. If the model needs a dump target, give it one on purpose. The real first token is freed.
+
+One changes the math. The other changes the input.
+"""),
+        mo.hstack([fix_radio, temp_slider, fix_layer, fix_head], justify="start", gap=1),
+    ]))
+    return temp_slider, fix_radio, fix_layer, fix_head
+
+
+@app.cell
+def act3_viz(data, mo, np, plt, temp_slider, fix_radio, fix_layer, fix_head):
+    # Compute temperature-scaled attention on-the-fly
     _scaled = data["raw_scores_all"] / temp_slider.value
     _exp = np.exp(_scaled - _scaled.max(axis=-1, keepdims=True))
     temp_attn = _exp / _exp.sum(axis=-1, keepdims=True)
 
-    _layer = _fix_layer.value
-    _head_val = _fix_head.value
+    _layer = fix_layer.value
+    _head_val = fix_head.value
 
     _mode_keys = {"Standard (baseline)": "standard", "Temperature scaling": "temp", "Sink token": "sink"}
-    _mode_key = _mode_keys[_fix_radio.value]
+    _mode_key = _mode_keys[fix_radio.value]
 
     _attn_map = {
         "standard": data["standard_attn"][_layer],
@@ -369,22 +394,6 @@ def act3_fixes(data, mo, np, plt):
     plt.tight_layout()
 
     mo.output.replace(mo.vstack([
-        mo.md("""
----
-
-## What Actually Works
-
-We tested several approaches. Exclusive Self Attention doesn't fix sinks. Elastic softmax has zero effect (softmax is shift-invariant). ReLU attention is more interesting — see below.
-
-Two approaches survive:
-
-**Temperature scaling** divides attention scores by T before softmax. Higher T spreads attention more evenly — the model stops dumping excess onto the first token because it doesn't need to.
-
-**Sink token** prepends a designated garbage token at position 0. If the model needs a dump target, give it one on purpose. The real first token is freed.
-
-One changes the math. The other changes the input.
-"""),
-        mo.hstack([_fix_radio, temp_slider, _fix_layer, _fix_head], justify="start", gap=1),
         _fig,
         mo.md(f"""
 **Layer {_layer} — attention to first real token:**
@@ -399,13 +408,13 @@ Sink Token: **{_sink_r:.4f}** ({(_sink_r / _std_s - 1) * 100:+.0f}%)
             mo.md(f"""
 ReLU attention replaces softmax with ReLU — attention no longer has to sum to 100%. At 12 tokens, it works: sinks drop to **{_relu_sink_12:.1f}%**. But at production length (175 tokens), sinks *increase* to **{_relu_sink_175:.1f}%** — worse than standard.
 
-The first 12 tokens of a 175-token sequence produce identical QKV values (causal masking means later tokens can't affect earlier ones). The chart above uses this fact: "ReLU (12 tokens)" is computed from the same forward pass, using only the first 12×12 block of attention scores.
+The first 12 tokens of a 175-token sequence produce identical QKV values (causal masking means later tokens can't affect earlier ones). The chart above uses this fact: "ReLU (12 tokens)" is computed from the same forward pass, using only the first 12x12 block of attention scores.
 
 Short-sequence validation can give the opposite conclusion from production-length testing.
 """),
         ])}),
     ]))
-    return temp_slider, temp_attn
+    return temp_attn,
 
 
 # ============================================================================
@@ -413,10 +422,8 @@ Short-sequence validation can give the opposite conclusion from production-lengt
 # ============================================================================
 
 @app.cell
-def act4_dashboard(data, mo, np, plt, temp_slider, temp_attn):
-    from matplotlib.patches import Rectangle as _Rect
-
-    _entropy_radio = mo.ui.radio(
+def act4_controls(mo, temp_slider):
+    entropy_radio = mo.ui.radio(
         options=[
             "Standard (baseline)",
             "Exclusive Self-Attention",
@@ -426,8 +433,30 @@ def act4_dashboard(data, mo, np, plt, temp_slider, temp_attn):
         value="Standard (baseline)",
         label="Condition",
     )
-    _dash_layer = mo.ui.slider(start=0, stop=11, value=8, label="Inspect layer", show_value=True)
-    _dash_head = mo.ui.slider(start=0, stop=11, value=0, label="Inspect head", show_value=True)
+    dash_layer = mo.ui.slider(start=0, stop=11, value=8, label="Inspect layer", show_value=True)
+    dash_head = mo.ui.slider(start=0, stop=11, value=0, label="Inspect head", show_value=True)
+
+    mo.output.replace(mo.vstack([
+        mo.md("""
+---
+
+## The Tool: Per-Head Attention Health
+
+This is what we actually built.
+
+Every transformer has dozens of attention heads, each specializing in different aspects of language. The entropy grid below shows which ones are working and which ones the sink has hijacked. Select any cell to see that head's full attention pattern.
+
+- **Blue = healthy** — attention spread across relevant tokens
+- **Red = sick** — attention concentrated on the sink
+"""),
+        mo.hstack([entropy_radio, dash_layer, dash_head], justify="start", gap=1),
+    ]))
+    return entropy_radio, dash_layer, dash_head
+
+
+@app.cell
+def act4_viz(data, mo, np, plt, temp_slider, temp_attn, entropy_radio, dash_layer, dash_head):
+    from matplotlib.patches import Rectangle as _Rect
 
     _cond_keys = {
         "Standard (baseline)": "standard",
@@ -435,7 +464,7 @@ def act4_dashboard(data, mo, np, plt, temp_slider, temp_attn):
         f"Temperature T={temp_slider.value:.1f}": "temp",
         "Sink Token": "sink",
     }
-    _cond = _cond_keys.get(_entropy_radio.value, "standard")
+    _cond = _cond_keys.get(entropy_radio.value, "standard")
 
     _p = np.clip(temp_attn, 1e-9, 1.0)
     _entropy_temp = -(_p * np.log(_p)).sum(axis=-1).mean(axis=-1)
@@ -466,7 +495,6 @@ def act4_dashboard(data, mo, np, plt, temp_slider, temp_attn):
                          _entropy_temp, data["entropy_sink"]])
     _vmin, _vmax = _all_ent.min(), _all_ent.max()
 
-    # ── Entropy grid with selection highlight ──
     _fig1, _ax1 = plt.subplots(figsize=(6, 5))
     _ax1.imshow(_ent, cmap="RdBu", aspect="auto", vmin=_vmin, vmax=_vmax)
     _ax1.set_xlabel("Head", fontsize=11)
@@ -474,30 +502,28 @@ def act4_dashboard(data, mo, np, plt, temp_slider, temp_attn):
     _ax1.set_title(f"Entropy — {_lbl_map[_cond]}", fontsize=12, fontweight="bold")
     _ax1.set_xticks(range(data["n_heads"]))
     _ax1.set_yticks(range(data["n_layers"]))
-    _ax1.add_patch(_Rect((_dash_head.value - 0.5, _dash_layer.value - 0.5), 1, 1,
+    _ax1.add_patch(_Rect((dash_head.value - 0.5, dash_layer.value - 0.5), 1, 1,
                           linewidth=3, edgecolor="#f1c40f", facecolor="none"))
     plt.colorbar(_ax1.images[0], ax=_ax1, shrink=0.8, label="Entropy (red=sick, blue=healthy)")
     plt.tight_layout()
 
-    # ── Detail heatmap for selected head ──
-    _detail = _attn_source[_cond][_dash_layer.value][_dash_head.value]
+    _detail = _attn_source[_cond][dash_layer.value][dash_head.value]
     _fig2, _ax2 = plt.subplots(figsize=(6, 5))
     _ax2.imshow(_detail, cmap="viridis", aspect="auto")
     _ax2.set_xlabel("Key position", fontsize=11)
     _ax2.set_ylabel("Query position", fontsize=11)
-    _ax2.set_title(f"Layer {_dash_layer.value}, Head {_dash_head.value} — {_lbl_map[_cond]}", fontsize=12, fontweight="bold")
+    _ax2.set_title(f"Layer {dash_layer.value}, Head {dash_head.value} — {_lbl_map[_cond]}", fontsize=12, fontweight="bold")
     plt.colorbar(_ax2.images[0], ax=_ax2, shrink=0.8)
     plt.tight_layout()
 
-    # ── Head diagnosis ──
     _median = np.median(_all_ent)
     _thresh = _median * 0.7
     _n_sick = int((_ent < _thresh).sum())
     _n_sick_std = int((_ent_std < _thresh).sum())
     _n_total = data["n_layers"] * data["n_heads"]
 
-    _head_ent = _ent[_dash_layer.value, _dash_head.value]
-    _head_ent_std = _ent_std[_dash_layer.value, _dash_head.value]
+    _head_ent = _ent[dash_layer.value, dash_head.value]
+    _head_ent_std = _ent_std[dash_layer.value, dash_head.value]
     if _head_ent < _thresh:
         _head_status = "**Naturally focused** — low entropy in all conditions. Likely a syntax or positional head." if _head_ent_std < _thresh else "**Still sick** — low entropy persists in this condition."
     else:
@@ -510,21 +536,8 @@ def act4_dashboard(data, mo, np, plt, temp_slider, temp_attn):
         _summary = f"**{_n_sick}** of {_n_total} heads remain sick (was {_n_sick_std} in standard). **{max(0, _healed)} heads healed.**"
 
     mo.output.replace(mo.vstack([
-        mo.md("""
----
-
-## The Tool: Per-Head Attention Health
-
-This is what we actually built.
-
-Every transformer has dozens of attention heads, each specializing in different aspects of language. The entropy grid below shows which ones are working and which ones the sink has hijacked. Select any cell to see that head's full attention pattern.
-
-- **Blue = healthy** — attention spread across relevant tokens
-- **Red = sick** — attention concentrated on the sink
-"""),
-        mo.hstack([_entropy_radio, _dash_layer, _dash_head], justify="start", gap=1),
         mo.hstack([_fig1, _fig2]),
-        mo.md(f"{_summary}\n\n**Layer {_dash_layer.value}, Head {_dash_head.value}:** {_head_status}"),
+        mo.md(f"{_summary}\n\n**Layer {dash_layer.value}, Head {dash_head.value}:** {_head_status}"),
     ]))
     return
 
@@ -621,15 +634,13 @@ This notebook connects [Exclusive Self Attention](https://alphaxiv.org/abs/2503.
 # ============================================================================
 
 @app.cell
-def try_your_own(data, mo, np, plt):
-    import torch as _torch
-
-    _text_form = mo.ui.form(
+def try_controls(mo):
+    text_form = mo.ui.form(
         mo.ui.text_area(label="Paste any text (max 200 tokens)", max_length=1500),
         submit_button_label="Analyze",
     )
 
-    _elements = [
+    mo.output.replace(mo.vstack([
         mo.md("""
 ---
 
@@ -637,79 +648,83 @@ def try_your_own(data, mo, np, plt):
 
 Paste your own text and see where GPT-2's attention goes. A fresh forward pass runs on submit — no caching, no tricks.
 """),
-        _text_form,
-    ]
+        text_form,
+    ]))
+    return text_form,
 
-    if _text_form.value:
-        _model = data["model"]
-        _tokenizer = data["tokenizer"]
-        _n_heads = data["n_heads"]
-        _n_layers = data["n_layers"]
-        _d_model = _model.config.n_embd
-        _d_head = _d_model // _n_heads
 
-        _inputs = _tokenizer(_text_form.value, return_tensors="pt", truncation=True, max_length=200)
-        _sl = _inputs["input_ids"].shape[1]
+@app.cell
+def try_viz(data, mo, np, plt, text_form):
+    import torch as _torch
 
-        _qkv_cache = {}
-        def _capture_qkv(_li):
-            def _hook(module, inp, out):
-                _qkv_cache[_li] = out.detach()
-            return _hook
+    if not text_form.value:
+        return
 
-        _hooks = []
-        for _i, _block in enumerate(_model.transformer.h):
-            _hooks.append(_block.attn.c_attn.register_forward_hook(_capture_qkv(_i)))
+    _model = data["model"]
+    _tokenizer = data["tokenizer"]
+    _n_heads = data["n_heads"]
+    _n_layers = data["n_layers"]
+    _d_model = _model.config.n_embd
+    _d_head = _d_model // _n_heads
 
-        with _torch.no_grad():
-            _out = _model(**_inputs, output_attentions=True)
+    _inputs = _tokenizer(text_form.value, return_tensors="pt", truncation=True, max_length=200)
+    _sl = _inputs["input_ids"].shape[1]
 
-        for _h in _hooks:
-            _h.remove()
+    _qkv_cache = {}
+    def _capture_qkv(_li):
+        def _hook(module, inp, out):
+            _qkv_cache[_li] = out.detach()
+        return _hook
 
-        _attn = np.stack([_layer[0].numpy() for _layer in _out.attentions])
+    _hooks = []
+    for _i, _block in enumerate(_model.transformer.h):
+        _hooks.append(_block.attn.c_attn.register_forward_hook(_capture_qkv(_i)))
 
-        # Sink magnitude per layer
-        _sink = _attn[:, :, :, 0].mean(axis=(1, 2))
+    with _torch.no_grad():
+        _out = _model(**_inputs, output_attentions=True)
 
-        # Entropy grid
-        _p = np.clip(_attn, 1e-9, 1.0)
-        _ent = -(_p * np.log(_p)).sum(axis=-1).mean(axis=-1)
+    for _h in _hooks:
+        _h.remove()
 
-        _median_ent = np.median(_ent)
-        _thresh = _median_ent * 0.7
-        _n_sick = int((_ent < _thresh).sum())
-        _n_total = _n_layers * _n_heads
+    _attn = np.stack([_layer[0].numpy() for _layer in _out.attentions])
 
-        _fig, _axes = plt.subplots(1, 2, figsize=(12, 5))
+    _sink = _attn[:, :, :, 0].mean(axis=(1, 2))
 
-        _axes[0].bar(np.arange(_n_layers), _sink * 100, color="#e74c3c", width=0.7)
-        _axes[0].set_xlabel("Layer", fontsize=11)
-        _axes[0].set_ylabel("Attention to position 0 (%)", fontsize=11)
-        _axes[0].set_title("Sink Magnitude — Your Text", fontsize=12, fontweight="bold")
-        _axes[0].grid(True, alpha=0.2, axis="y")
-        _axes[0].set_ylim(bottom=0)
+    _p = np.clip(_attn, 1e-9, 1.0)
+    _ent = -(_p * np.log(_p)).sum(axis=-1).mean(axis=-1)
 
-        _axes[1].imshow(_ent, cmap="RdBu", aspect="auto")
-        _axes[1].set_xlabel("Head", fontsize=11)
-        _axes[1].set_ylabel("Layer", fontsize=11)
-        _axes[1].set_title("Entropy Grid — Your Text", fontsize=12, fontweight="bold")
-        _axes[1].set_xticks(range(_n_heads))
-        _axes[1].set_yticks(range(_n_layers))
-        plt.colorbar(_axes[1].images[0], ax=_axes[1], shrink=0.8)
-        plt.tight_layout()
+    _median_ent = np.median(_ent)
+    _thresh = _median_ent * 0.7
+    _n_sick = int((_ent < _thresh).sum())
+    _n_total = _n_layers * _n_heads
 
-        _peak = _sink.max() * 100
+    _fig, _axes = plt.subplots(1, 2, figsize=(12, 5))
 
-        _elements.extend([
-            _fig,
-            mo.md(f"""
+    _axes[0].bar(np.arange(_n_layers), _sink * 100, color="#e74c3c", width=0.7)
+    _axes[0].set_xlabel("Layer", fontsize=11)
+    _axes[0].set_ylabel("Attention to position 0 (%)", fontsize=11)
+    _axes[0].set_title("Sink Magnitude — Your Text", fontsize=12, fontweight="bold")
+    _axes[0].grid(True, alpha=0.2, axis="y")
+    _axes[0].set_ylim(bottom=0)
+
+    _axes[1].imshow(_ent, cmap="RdBu", aspect="auto")
+    _axes[1].set_xlabel("Head", fontsize=11)
+    _axes[1].set_ylabel("Layer", fontsize=11)
+    _axes[1].set_title("Entropy Grid — Your Text", fontsize=12, fontweight="bold")
+    _axes[1].set_xticks(range(_n_heads))
+    _axes[1].set_yticks(range(_n_layers))
+    plt.colorbar(_axes[1].images[0], ax=_axes[1], shrink=0.8)
+    plt.tight_layout()
+
+    _peak = _sink.max() * 100
+
+    mo.output.replace(mo.vstack([
+        _fig,
+        mo.md(f"""
 **Your text ({_sl} tokens):** Peak sink: **{_peak:.1f}%** at layer {_sink.argmax()}. Average: **{_sink.mean() * 100:.1f}%**.
 **{_n_sick}** of {_n_total} heads show low entropy.
 """),
-        ])
-
-    mo.output.replace(mo.vstack(_elements))
+    ]))
     return
 
 
