@@ -1,0 +1,12 @@
+{
+  "baseline_ppl": 37.66162196989737,
+  "zero_token_ppl": 37.68617900887524,
+  "zero_token_sink": 41.03855776786804,
+  "zero_embed_ppl": 38.32564104301385,
+  "zero_embed_sink": 41.13404846191406,
+  "learned_ppl": 35.92272387846773,
+  "learned_sink": 41.833790957927704,
+  "delta_vs_zero": 2.4029171645461247,
+  "steps": 500,
+  "time_s": 115.76645374298096
+}

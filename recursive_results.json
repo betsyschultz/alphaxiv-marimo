@@ -1,0 +1,42 @@
+[
+  {
+    "round": 0,
+    "ppl": 37.66,
+    "sink": 41.6,
+    "sick": 22,
+    "healthy": 107,
+    "diffuse": 15
+  },
+  {
+    "round": 1,
+    "ppl": 23.32,
+    "sink": 44.2,
+    "sick": 25,
+    "healthy": 104,
+    "diffuse": 15
+  },
+  {
+    "round": 2,
+    "ppl": 22.87,
+    "sink": 45.0,
+    "sick": 26,
+    "healthy": 103,
+    "diffuse": 15
+  },
+  {
+    "round": 3,
+    "ppl": 22.38,
+    "sink": 45.1,
+    "sick": 27,
+    "healthy": 102,
+    "diffuse": 15
+  },
+  {
+    "round": 4,
+    "ppl": 22.11,
+    "sink": 45.5,
+    "sick": 27,
+    "healthy": 102,
+    "diffuse": 15
+  }
+]
