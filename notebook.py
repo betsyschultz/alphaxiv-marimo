@@ -1312,12 +1312,22 @@ transformers — explicit sink slots built into the architecture.
 Knowing the problem is structural, not behavioral, changes how you
 design the next model.
 
-### What this means
+### If you're building with transformers
 
-The right approach isn't eliminating sinks. It's understanding them.
-A sink token gives the model a proper place to park its surplus. The
-~10% of "noisy" heads are doing foundational work. And the surplus
-itself is a feature of how attention works, not a bug to fix.
+- **Serving long contexts?** Keep the sink token (position 0) in your
+KV cache. Evict other tokens aggressively. The sink is cheap to store
+and expensive to lose.
+- **Reading attention maps?** Filter out position 0 before interpreting.
+40-60% of attention weight is structural parking, not signal.
+- **Pruning heads?** Don't start with sinks — they're the least
+critical. High-entropy heads in early and final layers are far more
+important per-head. Test before removing.
+- **Designing a new architecture?** Add explicit register/sink tokens
+from the start. The model will create parking spots regardless; giving
+it purpose-built ones keeps the first real token clean.
+- **Fine-tuning with attention-shaping losses?** Don't expect sink
+patterns to change. Even at equal weighting (λ=1.0), sinks hold. Budget
+your alignment loss for other objectives.
 
 **Limitation:** Tested within the GPT-2 family. Generalization to other
 architectures (particularly post-norm models, which theory suggests
