@@ -70,7 +70,7 @@ def executive_summary(data, mo, np, plt):
 # Attention Sinks Are Load-Bearing
 ## Every fix failed. Here's why.
 
-*Betsy Schultz · GPT-2 (124M) · {data['seq_len']} tokens · computed in {data['elapsed']:.1f}s on CPU*
+*Betsy Schultz · GPT-2 (124M) · {data['seq_len']} tokens · {"loaded from cache" if data["from_cache"] else "computed"} in {data['elapsed']:.1f}s*
 
 GPT-2 dumps over 44% of its attention budget on one meaningless token.
 We tested every proposed fix — blocking self-attention, temperature
@@ -108,7 +108,10 @@ def precompute():
     import numpy as np
     import matplotlib.pyplot as plt
     import torch
+    import hashlib
+    import json as _json
     import time
+    import os
 
     # --- Consistent chart theme ---
     plt.rcParams.update({
@@ -133,19 +136,6 @@ def precompute():
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    mo.output.replace(
-        mo.Html(
-            "<div style='text-align:center;padding:40px'>"
-            "<p><strong>Loading GPT-2 and running forward passes...</strong></p>"
-            "<p style='color:#8b949e;font-size:13px'>This takes 5-15 seconds on CPU.</p>"
-            "</div>"
-        )
-    )
-
-    _model = AutoModelForCausalLM.from_pretrained("gpt2", attn_implementation="eager")
-    _tokenizer = AutoTokenizer.from_pretrained("gpt2")
-    _model.eval()
-
     _TEXT = (
         "The history of attention mechanisms in neural networks begins with "
         "Bahdanau's 2014 paper on sequence-to-sequence models. Rather than "
@@ -162,83 +152,11 @@ def precompute():
         "weight across many heads and layers. These attention sinks appear to "
         "emerge from the pre-norm architecture used in most modern transformers."
     )
-    _inputs = _tokenizer(_TEXT, return_tensors="pt")
-    _seq_len = _inputs["input_ids"].shape[1]
-    _tokens = [_tokenizer.decode(t) for t in _inputs["input_ids"][0]]
 
-    _n_heads = _model.config.n_head
-    _d_model = _model.config.n_embd
-    _d_head = _d_model // _n_heads
-    _n_layers = _model.config.n_layer
-
-    # --- Standard forward pass with QKV hooks ---
-    _qkv_cache = {}
-
-    def _capture_qkv(layer_idx):
-        def hook_fn(module, input, output):
-            _qkv_cache[layer_idx] = output.detach()
-        return hook_fn
-
-    _hooks = []
-    for _i, _block in enumerate(_model.transformer.h):
-        _hooks.append(_block.attn.c_attn.register_forward_hook(_capture_qkv(_i)))
-
-    with torch.no_grad():
-        _standard_out = _model(**_inputs, output_attentions=True)
-
-    for _h in _hooks:
-        _h.remove()
-
-    _standard_attn = np.stack([_layer[0].numpy() for _layer in _standard_out.attentions])
-
-    # --- Extract raw QK scores ---
-    _causal_mask = torch.tril(torch.ones(_seq_len, _seq_len)).unsqueeze(0).unsqueeze(0)
-    _raw_scores_all = []
-    for _i in range(_n_layers):
-        _q, _k, _ = _qkv_cache[_i].split(_d_model, dim=-1)
-        _q = _q.view(1, _seq_len, _n_heads, _d_head).transpose(1, 2)
-        _k = _k.view(1, _seq_len, _n_heads, _d_head).transpose(1, 2)
-        _scores = torch.matmul(_q, _k.transpose(-2, -1)) / (_d_head ** 0.5)
-        _scores = _scores.masked_fill(_causal_mask == 0, float("-inf"))
-        _raw_scores_all.append(_scores[0].numpy())
-    _raw_scores_all = np.stack(_raw_scores_all)
-
-    # --- ESA: zero diagonal, renormalize ---
-    _esa_attn = _standard_attn.copy()
-    for _li in range(_n_layers):
-        for _hi in range(_n_heads):
-            _a = _esa_attn[_li, _hi].copy()
-            np.fill_diagonal(_a, 0.0)
-            _rs = _a.sum(axis=-1, keepdims=True)
-            _rs = np.where(_rs == 0, 1.0, _rs)
-            _esa_attn[_li, _hi] = _a / _rs
-
-    # --- Sink token forward pass ---
-    _sink_ids = torch.cat(
-        [torch.zeros(1, 1, dtype=torch.long), _inputs["input_ids"]], dim=1
-    )
-    _sink_seq_len = _sink_ids.shape[1]
-
-    _qkv_cache_sink = {}
-
-    def _capture_qkv_sink(layer_idx):
-        def hook_fn(module, input, output):
-            _qkv_cache_sink[layer_idx] = output.detach()
-        return hook_fn
-
-    _hooks_sink = []
-    for _i, _block in enumerate(_model.transformer.h):
-        _hooks_sink.append(
-            _block.attn.c_attn.register_forward_hook(_capture_qkv_sink(_i))
-        )
-
-    with torch.no_grad():
-        _sink_out = _model(input_ids=_sink_ids, output_attentions=True)
-
-    for _h in _hooks_sink:
-        _h.remove()
-
-    _sink_attn_full = np.stack([_layer[0].numpy() for _layer in _sink_out.attentions])
+    # --- Cache setup ---
+    _dir = os.path.dirname(os.path.abspath(__file__))
+    _cache_path = os.path.join(_dir, "precomputed_cache.npz")
+    _text_hash = hashlib.md5(_TEXT.encode()).hexdigest()[:12]
 
     # --- Helpers ---
     def _entropy(attn_4d):
@@ -247,6 +165,169 @@ def precompute():
 
     def _sink_mag(attn_4d, col=0):
         return attn_4d[:, :, :, col].mean(axis=(1, 2))
+
+    # --- Try loading from cache ---
+    _from_cache = False
+    if os.path.exists(_cache_path):
+        try:
+            _cached = np.load(_cache_path, allow_pickle=True)
+            if _cached["text_hash"].item() == _text_hash:
+                _from_cache = True
+        except Exception:
+            pass
+
+    if _from_cache:
+        with mo.status.spinner("Loading from cache..."):
+            _standard_attn = _cached["standard_attn"]
+            _esa_attn = _cached["esa_attn"]
+            _raw_scores_all = _cached["raw_scores_all"]
+            _sink_attn_full = _cached["sink_attn_full"]
+            _tokens = list(_cached["tokens"])
+            _seq_len = int(_cached["seq_len"])
+            _n_layers = int(_cached["n_layers"])
+            _n_heads = int(_cached["n_heads"])
+            _temp_sweep = {
+                round(t, 1): _cached[f"temp_{t:.1f}"]
+                for t in np.arange(1.0, 5.1, 0.1)
+                if f"temp_{t:.1f}" in _cached
+            }
+
+            # Still need model for try-it-yourself
+            _model = AutoModelForCausalLM.from_pretrained(
+                "gpt2", attn_implementation="eager"
+            )
+            _tokenizer = AutoTokenizer.from_pretrained("gpt2")
+            _model.eval()
+    else:
+        # --- Full computation with progress ---
+        with mo.status.spinner("Loading GPT-2...") as _status:
+            _model = AutoModelForCausalLM.from_pretrained(
+                "gpt2", attn_implementation="eager"
+            )
+            _tokenizer = AutoTokenizer.from_pretrained("gpt2")
+            _model.eval()
+
+            _status.update("Tokenizing input...")
+            _inputs = _tokenizer(_TEXT, return_tensors="pt")
+            _seq_len = _inputs["input_ids"].shape[1]
+            _tokens = [_tokenizer.decode(t) for t in _inputs["input_ids"][0]]
+            _n_heads = _model.config.n_head
+            _d_model = _model.config.n_embd
+            _d_head = _d_model // _n_heads
+            _n_layers = _model.config.n_layer
+
+            # --- Standard forward pass with QKV hooks ---
+            _status.update("Running standard forward pass...")
+            _qkv_cache = {}
+
+            def _capture_qkv(layer_idx):
+                def hook_fn(module, input, output):
+                    _qkv_cache[layer_idx] = output.detach()
+                return hook_fn
+
+            _hooks = []
+            for _i, _block in enumerate(_model.transformer.h):
+                _hooks.append(
+                    _block.attn.c_attn.register_forward_hook(_capture_qkv(_i))
+                )
+
+            with torch.no_grad():
+                _standard_out = _model(**_inputs, output_attentions=True)
+
+            for _h in _hooks:
+                _h.remove()
+
+            _standard_attn = np.stack(
+                [_layer[0].numpy() for _layer in _standard_out.attentions]
+            )
+
+            # --- Extract raw QK scores ---
+            _status.update("Extracting QK scores...")
+            _causal_mask = torch.tril(
+                torch.ones(_seq_len, _seq_len)
+            ).unsqueeze(0).unsqueeze(0)
+            _raw_scores_all = []
+            for _i in range(_n_layers):
+                _q, _k, _ = _qkv_cache[_i].split(_d_model, dim=-1)
+                _q = _q.view(1, _seq_len, _n_heads, _d_head).transpose(1, 2)
+                _k = _k.view(1, _seq_len, _n_heads, _d_head).transpose(1, 2)
+                _scores = torch.matmul(
+                    _q, _k.transpose(-2, -1)
+                ) / (_d_head ** 0.5)
+                _scores = _scores.masked_fill(
+                    _causal_mask == 0, float("-inf")
+                )
+                _raw_scores_all.append(_scores[0].numpy())
+            _raw_scores_all = np.stack(_raw_scores_all)
+
+            # --- ESA: zero diagonal, renormalize ---
+            _status.update("Computing ESA...")
+            _esa_attn = _standard_attn.copy()
+            for _li in range(_n_layers):
+                for _hi in range(_n_heads):
+                    _a = _esa_attn[_li, _hi].copy()
+                    np.fill_diagonal(_a, 0.0)
+                    _rs = _a.sum(axis=-1, keepdims=True)
+                    _rs = np.where(_rs == 0, 1.0, _rs)
+                    _esa_attn[_li, _hi] = _a / _rs
+
+            # --- Sink token forward pass ---
+            _status.update("Running sink token forward pass...")
+            _sink_ids = torch.cat(
+                [torch.zeros(1, 1, dtype=torch.long), _inputs["input_ids"]],
+                dim=1,
+            )
+
+            _qkv_cache_sink = {}
+
+            def _capture_qkv_sink(layer_idx):
+                def hook_fn(module, input, output):
+                    _qkv_cache_sink[layer_idx] = output.detach()
+                return hook_fn
+
+            _hooks_sink = []
+            for _i, _block in enumerate(_model.transformer.h):
+                _hooks_sink.append(
+                    _block.attn.c_attn.register_forward_hook(
+                        _capture_qkv_sink(_i)
+                    )
+                )
+
+            with torch.no_grad():
+                _sink_out = _model(input_ids=_sink_ids, output_attentions=True)
+
+            for _h in _hooks_sink:
+                _h.remove()
+
+            _sink_attn_full = np.stack(
+                [_layer[0].numpy() for _layer in _sink_out.attentions]
+            )
+
+            # --- Precompute temperature sweep ---
+            _status.update("Precomputing temperature sweep...")
+            _temp_sweep = {}
+            for _t_val in np.arange(1.0, 5.1, 0.1):
+                _t_key = round(float(_t_val), 1)
+                _scaled = _raw_scores_all / _t_val
+                _exp = np.exp(_scaled - _scaled.max(axis=-1, keepdims=True))
+                _temp_sweep[_t_key] = _exp / _exp.sum(axis=-1, keepdims=True)
+
+            # --- Save cache ---
+            _status.update("Saving cache...")
+            _save_dict = {
+                "text_hash": _text_hash,
+                "standard_attn": _standard_attn,
+                "esa_attn": _esa_attn,
+                "raw_scores_all": _raw_scores_all,
+                "sink_attn_full": _sink_attn_full,
+                "tokens": np.array(_tokens, dtype=object),
+                "seq_len": _seq_len,
+                "n_layers": _n_layers,
+                "n_heads": _n_heads,
+            }
+            for _t_key, _t_attn in _temp_sweep.items():
+                _save_dict[f"temp_{_t_key:.1f}"] = _t_attn
+            np.savez_compressed(_cache_path, **_save_dict)
 
     # --- Color constants ---
     _C_STD = "#e74c3c"
@@ -259,6 +340,7 @@ def precompute():
         "esa_attn": _esa_attn,
         "raw_scores_all": _raw_scores_all,
         "sink_attn_full": _sink_attn_full,
+        "temp_sweep": _temp_sweep,
         "entropy_standard": _entropy(_standard_attn),
         "entropy_esa": _entropy(_esa_attn),
         "entropy_sink": _entropy(_sink_attn_full),
@@ -273,6 +355,7 @@ def precompute():
         "model": _model,
         "tokenizer": _tokenizer,
         "elapsed": time.time() - _start,
+        "from_cache": _from_cache,
         "colors": {
             "standard": _C_STD,
             "temp": _C_TEMP,
@@ -597,10 +680,13 @@ keeping the sink token in the KV cache lets models process unlimited-length text
 
 @app.cell(hide_code=True)
 def fix_comparison(data, mo, np, plt, fix_radio, temp_slider, fix_layer, fix_head):
-    # Temperature-scaled attention
-    _scaled = data["raw_scores_all"] / temp_slider.value
-    _exp = np.exp(_scaled - _scaled.max(axis=-1, keepdims=True))
-    temp_attn = _exp / _exp.sum(axis=-1, keepdims=True)
+    # Temperature-scaled attention (precomputed lookup)
+    _t_key = round(float(temp_slider.value), 1)
+    temp_attn = data["temp_sweep"].get(_t_key)
+    if temp_attn is None:
+        _scaled = data["raw_scores_all"] / temp_slider.value
+        _exp = np.exp(_scaled - _scaled.max(axis=-1, keepdims=True))
+        temp_attn = _exp / _exp.sum(axis=-1, keepdims=True)
 
     _layer = fix_layer.value
     _head_val = fix_head.value
