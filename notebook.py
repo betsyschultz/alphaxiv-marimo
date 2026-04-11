@@ -32,18 +32,19 @@ def table_of_contents():
 @app.cell(hide_code=True)
 def executive_summary(data, mo, np, plt):
     _approaches = [
-        "Standard\n(baseline)", "Block self-\nattention", "Temperature\nscaling",
-        "Sink\ntoken", "Training\nλ=0.1", "Training\nλ=1.0", "Recursive",
+        "Standard\n(baseline)", "Block self-\nattention", "Temp\nscaling",
+        "Sink\ntoken", "Train\nλ=0.1", "Train\nλ=1.0", "Train\nλ=10",
+        "Recursive",
     ]
-    _sink_values = [44.3, 44.1, 19.4, 0.9, 44.4, 48.2, 45.5]
+    _sink_values = [44.3, 44.1, 19.4, 0.9, 46.2, 47.8, 45.3, 45.5]
     _colors = [
         "#e74c3c", "#95a5a6", "#3498db", "#2ecc71",
-        "#e74c3c", "#8e44ad", "#c0392b",
+        "#e74c3c", "#8e44ad", "#6c3483", "#c0392b",
     ]
     _labels = [
         "44.3%", "44.1%\nno change", "19.4%\nredistributed",
-        "0.9%\nredirected", "44.4%\nresisted", "48.2%\n10× pressure\nstill worse",
-        "45.5%\nworse",
+        "0.9%\nredirected", "46.2%\nresisted", "47.8%\nequal pressure\nworse",
+        "45.3%\n100× pressure\nstill 45%", "45.5%\nworse",
     ]
 
     _fig, _ax = plt.subplots(figsize=(12, 4))
@@ -1126,19 +1127,26 @@ early and never budge.
 
 The original training used λ_align = 0.1 (alignment loss at 10% of LM
 loss). A natural objection: maybe the gradient signal was just too weak.
-So I swept across three alignment weights:
+So I swept across four alignment weights, each with three random seeds:
 
-| λ_align | PPL before | PPL after | Sink waste before | Sink waste after |
-|---------|-----------|-----------|-------------------|------------------|
-| 0.1 | 44.5 | 25.5 | 47.4% | 46.6% |
-| 0.5 | 44.5 | 25.6 | 47.4% | 47.7% |
-| **1.0** | 44.5 | 25.8 | 47.4% | **48.2%** |
+| λ_align | Sink waste (mean ± std) | PPL after | Sick heads |
+|---------|------------------------|-----------|------------|
+| 0.1 | 46.2% ± 0.2 | 26.8 | 32 |
+| 0.5 | 47.1% ± 0.2 | 26.9 | 32 |
+| 1.0 | 47.8% ± 0.3 | 27.0 | 30 |
+| **10.0** | **45.3% ± 0.4** | **28.7** | **28** |
 
-At λ = 1.0 — alignment loss weighted *equal* to language modeling loss —
-sink waste **increased**. The model improved at language while actively
-resisting the alignment gradient. The stronger you push, the harder it
-pushes back. This isn't a weak-signal problem. The architecture requires
-these sinks.
+*Baseline: 47.4% sink waste, 44.5 PPL, 34 sick heads. All runs started from
+fresh GPT-2 weights. Standard deviations across seeds are ±0.2-0.4% — the
+pattern is stable regardless of initialization.*
+
+Two patterns emerge. From λ = 0.1 to 1.0, sinks *increase* as the model
+improves — more specialized heads means more idle capacity that needs
+parking. At λ = 10.0, where alignment loss dominates language modeling
+10-to-1, the model finally trades language quality (+1.9 PPL) for a
+marginal sink reduction — but sinks still sit at **45.3%**. Even under
+extreme gradient pressure, the structural floor holds. This isn't a
+weak-signal problem. The architecture requires these sinks.
 
 {_recursive_md}
 
