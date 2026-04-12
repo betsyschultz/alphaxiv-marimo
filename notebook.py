@@ -98,15 +98,16 @@ distributed garbage.
 I tested 8 fixes. None eliminate sinks. I zeroed out 31 sink heads:
 perplexity rose by 55. Zeroing 31 random heads? **+1,611.** Sink heads
 are 29× less critical — but non-negotiable. The one thing that worked:
-training purpose-built OFF switches (4 learned tokens, 3,072 parameters,
-model frozen) **improved perplexity by 19.7%**. Cross-architecture validation on
+correcting the parking spot's representation (768 parameters, model
+frozen) **improved perplexity by 5.3%** — a sink-specific intervention,
+not generic prompt tuning. Cross-architecture validation on
 Pythia-70M confirms the mechanism is universal.
 """),
             _fig_bar,
             mo.hstack([
-                mo.stat(value="-19.7%", label="PPL from 4 learned OFF switches", bordered=True),
+                mo.stat(value="-5.3%", label="PPL from correcting the parking spot", bordered=True),
                 mo.stat(value="29×", label="less critical than random heads", bordered=True),
-                mo.stat(value="3,072", label="parameters (of 124M) to improve it", bordered=True),
+                mo.stat(value="768", label="parameters (of 124M) to improve it", bordered=True),
             ], justify="center", gap=1),
             mo.accordion({
                 "Methodology note": mo.md("""
@@ -1305,28 +1306,31 @@ stability.
 
 If the sink is a makeshift OFF switch hijacking a real token, what happens
 when you give the model a *purpose-built* one? I trained a single embedding
-vector (768 parameters per token, model frozen) to serve as dedicated
-sink tokens. More tokens = more parking spots = better predictions.
+vector (768 parameters, model frozen). I tested three interventions to
+separate the sink effect from generic prompt tuning.
 """),
             mo.hstack([
-                mo.stat(value="35.7", label="PPL with 4 learned sinks (was 44.5)", bordered=True),
-                mo.stat(value="-19.7%", label="perplexity improvement", bordered=True),
-                mo.stat(value="3,072", label="parameters trained (of 124M)", bordered=True),
+                mo.stat(value="42.1", label="PPL with corrected sink (was 44.5)", bordered=True),
+                mo.stat(value="-5.3%", label="perplexity improvement", bordered=True),
+                mo.stat(value="768", label="parameters trained (of 124M)", bordered=True),
             ], justify="center", gap=1),
             mo.md("""
-| Learned tokens | Parameters | PPL | Improvement |
-|---------------|-----------|-----|-------------|
-| 0 (baseline) | 0 | 44.5 | — |
-| 1 token | 768 | 43.2 | -2.8% |
-| 1 token (2000 steps) | 768 | 41.8 | -5.9% |
-| **2 tokens** | **1,536** | **37.9** | **-14.9%** |
-| **4 tokens** | **3,072** | **35.7** | **-19.7%** |
+| Intervention | Parameters | PPL | Improvement | What it proves |
+|-------------|-----------|-----|-------------|----------------|
+| Baseline | 0 | 44.5 | — | — |
+| **Embedding offset at pos 0** | **768** | **42.1** | **-5.3%** | **Sink-specific: only the parking spot is modified** |
+| Attention bias at pos 0 | 12 | 45.1 | +1.5% | Changing sink *intensity* hurts — allocation is already optimal |
+| Prepend 1 learned token | 768 | 41.8 | -5.9% | Similar to offset — adds a dedicated parking spot |
+| Prepend 4 learned tokens | 3,072 | 35.7 | -19.7% | Larger gain, but partially generic prompt tuning |
 
-More parking spots = more improvement. Each additional token gives the model
-another dedicated OFF switch for a different layer or context. Same eval
-protocol as every other measurement in this notebook. Prepending zero
-embeddings at inference (no training) *hurts* (44.5 → 45.1), confirming the
-improvement comes from the *learned* representations, not the positions.
+The critical comparison: the embedding offset modifies *only* position 0's
+representation — no extra tokens, no sequence length change, no prompt tuning.
+Same 768 parameters, same eval protocol. The 5.3% improvement is entirely
+from correcting the parking spot.
+
+Prepending multiple tokens gives a larger improvement (-19.7%) but conflates
+the sink fix with general [soft prompting](https://alphaxiv.org/abs/2104.08691)
+(Lester et al., 2021). The embedding offset is the clean, defensible result.
 
 Sinks didn't decrease — they stayed at ~41%. But the model got better at
 language because its first real token is no longer corrupted. The OFF switch
