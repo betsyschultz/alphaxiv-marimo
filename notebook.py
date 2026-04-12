@@ -99,12 +99,12 @@ We tested 8 fixes. None eliminate sinks. We zeroed out 31 sink heads:
 perplexity rose by 55. Zeroing 31 random heads? **+1,611.** Sink heads
 are 29× less critical — but non-negotiable. The one thing that worked:
 training a purpose-built OFF switch (768 parameters, model frozen)
-**improved perplexity by 4.6%**. Cross-architecture validation on
+**improved perplexity by 2.8%**. Cross-architecture validation on
 Pythia-70M confirms the mechanism is universal.
 """),
             _fig_bar,
             mo.hstack([
-                mo.stat(value="-4.6%", label="PPL from learned OFF switch", bordered=True),
+                mo.stat(value="-2.8%", label="PPL from learned OFF switch", bordered=True),
                 mo.stat(value="29×", label="less critical than random heads", bordered=True),
                 mo.stat(value="768", label="parameters (of 124M) to improve it", bordered=True),
             ], justify="center", gap=1),
@@ -1250,18 +1250,18 @@ vector (768 parameters, model frozen) to serve as a dedicated sink token.
 500 steps, 2 minutes of training.
 """),
             mo.hstack([
-                mo.stat(value="35.9", label="PPL with learned sink (was 37.7)", bordered=True),
-                mo.stat(value="-4.6%", label="perplexity improvement", bordered=True),
+                mo.stat(value="43.2", label="PPL with learned sink (was 44.5)", bordered=True),
+                mo.stat(value="-2.8%", label="perplexity improvement", bordered=True),
                 mo.stat(value="768", label="parameters trained (of 124M)", bordered=True),
             ], justify="center", gap=1),
             mo.md("""
-**Perplexity improved by 4.6%** — from 37.7 to 35.9 on WikiText-2
-validation — by training 0.0006% of the model's parameters. (The 37.7
-baseline reflects GPT-2's perplexity when evaluated with the same
-prepend protocol but using a zero token instead of a learned one.) The learned embedding gives the model a proper
-parking spot instead of hijacking the first real word. Prepending a zero
-token at inference (no training) had no effect (37.7 → 37.7), confirming
-the improvement comes from the *learned* representation, not the position.
+**Perplexity improved by 2.8%** — from 44.5 to 43.2 on WikiText-2
+validation — by training 0.0006% of the model's parameters. Same eval
+protocol as every other measurement in this notebook. The learned embedding
+gives the model a proper parking spot instead of hijacking the first real
+word. Prepending a zero embedding at inference (no training) *hurts*
+(44.5 → 45.1), confirming the improvement comes from the *learned*
+representation, not the position.
 
 Sinks didn't decrease — they stayed at ~41%. But the model got better at
 language because its first real token is no longer corrupted. The OFF switch

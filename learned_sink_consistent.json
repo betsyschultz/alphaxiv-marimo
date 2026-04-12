@@ -1,0 +1,8 @@
+{
+  "eval_protocol": "all_val_chunks_batch4_drop_last",
+  "baseline_ppl": 44.4578,
+  "zero_embed_ppl": 45.1357,
+  "learned_ppl": 43.2077,
+  "improvement_pct": 2.81,
+  "steps": 500
+}
