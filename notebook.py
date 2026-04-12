@@ -85,29 +85,29 @@ def executive_summary(data, mo, np, plt):
             mo.md(f"""
 *Betsy Schultz · GPT-2 (124M) · {data['seq_len']} tokens · {"loaded from cache" if data["from_cache"] else "computed"} in {data['elapsed']:.1f}s*
 
-*Original diagnostic experiments: 8 fix approaches tested, multi-seed λ sweep
-(4 weights × 3 seeds), three-class head ablation, and cross-model validation —
+*8 fix approaches tested, cross-model validation, and a method that works —
 all interactive below.*
 
-GPT-2 dumps over 44% of its attention budget on one meaningless token.
-That's not a bug — it's a garbage bin. When a head has nothing useful
-to attend to, softmax forces it to put 100% somewhere. Position 0
-becomes the dump target: concentrated garbage in one place beats
-spreading it across every word.
+Language models decide what each word means by looking at the words around
+it. But GPT-2 wastes over **44% of that attention** staring at the first
+word — regardless of what the first word is. That's an attention sink.
 
-I tested 8 fixes. None eliminate sinks. I zeroed out 31 sink heads:
-perplexity rose by 55. Zeroing 31 random heads? **+1,611.** Sink heads
-are 29× less critical — but non-negotiable. The one thing that worked:
-building a better garbage bin (768 parameters, model frozen) **improved
-perplexity by 5.3%** — a sink-specific intervention, not generic prompt
-tuning. Cross-architecture validation on
-Pythia-70M confirms the mechanism is universal.
+Think of each attention head as a worker on an assembly line. Some workers
+have a job for every sentence (grammar, pronouns). Others are idle — there's
+no grammar to check in a string of adjectives. But every worker *must* point
+somewhere. So idle workers dump their attention on the first word, turning
+it into a **garbage bin**.
+
+I tested 8 ways to fix this. None worked — the model *needs* the garbage
+bin. But I found that training a better one (768 numbers, 2 minutes)
+**makes the model 5.3% better at predicting language.** The bin is the
+problem, not the garbage.
 """),
             _fig_bar,
             mo.hstack([
-                mo.stat(value="-5.3%", label="PPL from a better garbage bin", bordered=True),
+                mo.stat(value="-5.3%", label="better predictions from a better bin", bordered=True),
                 mo.stat(value="29×", label="less critical than random heads", bordered=True),
-                mo.stat(value="768", label="parameters (of 124M) to improve it", bordered=True),
+                mo.stat(value="768", label="numbers trained (of 124 million)", bordered=True),
             ], justify="center", gap=1),
             mo.accordion({
                 "Methodology note": mo.md("""
@@ -668,19 +668,19 @@ def fix_controls(mo):
     mo.output.replace(
         mo.vstack([
             mo.md("""
-## Redistribution Experiments
+## Can You Redistribute the Garbage?
 
-**Temperature scaling** divides scores by T before softmax — spreads attention more evenly.
-**Sink token** prepends a garbage token at position 0 — gives the model a proper dump target.
-One changes the math. The other changes the input.
+Two approaches that partially work:
+
+**Temperature scaling** makes each head less confident about where to look — attention spreads more evenly instead of piling on the first word.
+**Sink token** puts a dedicated garbage word at the front — if the model needs a dump target, give it one on purpose so real words stay clean.
 """),
             mo.accordion({
                 "What about blocking self-attention? (ESA)": mo.md("""
 [Exclusive Self Attention](https://alphaxiv.org/abs/2603.09078) (Zhai, 2026) blocks
-the diagonal — tokens can't attend to themselves. I tested it: **no effect** on
-sink magnitude at any layer. Sinks aren't caused by self-attention. They're
-structural, tied to pre-norm residual streams. An original diagnostic: ESA meets
-[attention sink research](https://alphaxiv.org/abs/2603.05498), and nothing changes.
+the diagonal — words can't look at themselves. I tested it: **no effect.**
+The garbage bin isn't caused by words looking at themselves. It's deeper —
+built into the model's architecture.
 """),
             }),
             mo.accordion({
@@ -907,17 +907,17 @@ def entropy_controls(mo, temp_slider):
     mo.output.replace(
         mo.vstack([
             mo.md("""
-## Per-Head Attention Health
+## Which Heads Are Sick?
 
-Each head gets a health score based on entropy (how spread out its attention is).
-High entropy = looking at many tokens (healthy). Low entropy = fixated on one position (sick).
+Each of GPT-2's 144 attention heads gets a health score. A healthy head
+spreads its attention across many relevant words. A sick head dumps most
+of its attention on the garbage bin.
 
-**Blue = healthy** · **Red = sick** · Start at Layer 7, Head 3 — a clearly sink-corrupted head.
+**Blue = healthy** · **Red = sick** · Start at Layer 7, Head 3 — a clearly sick head.
 
-*Threshold: a head is "sick" if its entropy falls below 70% of the median across all heads.
-This is a heuristic, not ground truth — there's no labeled dataset of sick vs. healthy heads.
-I validated the cutoff by checking that heads classified as sick visually show the sink stripe
-in their attention maps, and that the count is stable across nearby thresholds (60-80%).*
+*How I define "sick": a head whose attention is more concentrated than 70% of
+all heads. I verified this by checking that heads I classified as sick visually
+show the garbage stripe, and that the count stays stable if I adjust the threshold.*
 """),
             mo.callout(
                 mo.hstack(
@@ -1229,14 +1229,16 @@ loss = lm_loss + lambda_align * align_loss  # lambda swept: 0.1, 0.5, 1.0, 10.0
     mo.output.replace(
         mo.vstack([
             mo.md(f"""
-## The Training Experiment: Can You Train the Sinks Away?
+## Can You Train the Garbage Away?
 
-If I know what healthy attention looks like, can I train the model to produce it?
-I finetuned GPT-2 on WikiText-2 with an alignment loss — standard LM training plus a penalty
-pushing sick heads to distribute attention like healthy neighbors. {_blend["total_steps"]} steps, three epochs.
+If I know what healthy attention looks like, can I train the model to
+copy it? I retrained GPT-2 with an extra incentive: a penalty that
+pushes sick heads to spread their attention more like healthy ones.
+{_blend["total_steps"]} training steps.
 
-Perplexity dropped from {_ppl_before} to {_ppl_after} ({_ppl_drop:.0f}% improvement).
-But **attention patterns remained unchanged.**
+The model got **{_ppl_drop:.0f}% better at language** (perplexity
+{_ppl_before} → {_ppl_after}). But it **refused to change its attention
+patterns.** The garbage stayed exactly where it was.
 """),
             _training_code,
             mo.callout(
@@ -1249,9 +1251,9 @@ But **attention patterns remained unchanged.**
 | Sink waste | {_waste_before}% | {_waste_after}% | +{_waste_after - _waste_before:.2f}pp |
 | Sick heads | {_sick_before}/144 | {_sick_after}/144 | +{_sick_after - _sick_before} |
 
-Sinks are load-bearing. The model had every opportunity to reallocate
-that attention budget. The loss function explicitly rewarded it.
-It didn't.
+The garbage is load-bearing. The model had every opportunity to
+clean up its attention. The training explicitly rewarded it.
+It chose not to.
 """),
                 kind="warn",
             ),
@@ -1550,19 +1552,13 @@ def adaptive_controls(mo):
     mo.output.replace(
         mo.vstack([
             mo.md("""
-## The Adaptive Fix: Can I Heal Sick Heads?
+## What If You Force Sick Heads to Spread Out?
 
-The notebook diagnosed which heads are sick. What if the diagnosis *is* the
-treatment? For each sick head, I scale its pre-softmax scores by a
-per-head temperature proportional to how far below the healthy threshold
-it falls. Healthy heads are untouched.
+I know which heads are sick. What if I force them to look at more words
+instead of just staring at the garbage bin? For each sick head, I soften
+its attention in proportion to how sick it is. Healthy heads stay untouched.
 
-```python
-T_h = 1 + strength × (median_entropy / head_entropy - 1)
-fixed_scores = raw_scores / T_h  # only for sick heads
-```
-
-Drag the slider to control treatment strength. Watch the entropy grid heal.
+Drag the slider. Watch sick heads (red) turn healthy (blue) in real time.
 """),
             mo.callout(adapt_strength, kind="info"),
         ])
@@ -1775,30 +1771,23 @@ def the_insight(data, mo, np, plt):
     mo.output.replace(
         mo.vstack([
             mo.md(f"""
-## Why Sinks Exist
+## Why Every Transformer Has a Garbage Bin
 
-Softmax forces every head to distribute **exactly 100%** of its attention
-budget. No exceptions. No "attend to nothing" option.
+Every attention head must distribute exactly 100% of its attention across
+all the words. There's no way to say "I have nothing useful to look at."
 
-GPT-2 has 12 attention heads per layer, each specialized. One tracks
-subject-verb pairs, another handles pronouns, another follows topics.
-But when the subject-verb head encounters a string of adjectives, it
-has nothing to do — and softmax still demands it distribute 100% somewhere.
+GPT-2 has 12 heads per layer, each with a job — grammar, pronouns, topics.
+But most jobs don't apply to every sentence. When the grammar head hits a
+string of adjectives, it's idle. The math still demands it point somewhere.
 
-Two choices: spread attention randomly across all words (adding noise
-to everything) or dump it on one predictable token (concentrating the
-noise). **Concentrated garbage beats distributed garbage.** Dump on
-position 0 and the damage is contained. Spread randomly and you corrupt
-every representation a little.
+Two choices: spread attention thinly across every word (adding a little
+noise to everything), or dump it all on one predictable word (concentrating
+the noise). **Concentrated garbage in one bin beats a thin layer of garbage
+on every surface.** That's why position 0 becomes the dump target.
 
-The sink is the model's **garbage bin** — its solution to "I have nothing
-useful to do right now, but softmax says I have to put my attention
-*somewhere*." Not a malfunction. Infrastructure.
-
-That's why training can't eliminate sinks. The architecture *requires*
-them. And a better model has more sinks, not fewer: more specialized
-heads means more heads sitting idle in any given context. The parking
-spot gets more use as the model gets smarter.
+Better models have *more* idle heads, not fewer. More specialization means
+more workers sitting idle in any given context. The garbage bin gets busier
+as the model gets smarter.
 """),
             mo.md("### Cross-Model Validation"),
             _fig_cross,
