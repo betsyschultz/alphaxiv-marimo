@@ -1482,7 +1482,7 @@ def the_insight(data, mo, np, plt):
     for _i, _v in enumerate(_model_sink):
         _cross_axes[0].text(_i, _v + 1, f"{_v}%", ha="center", fontweight="bold")
     _cross_axes[0].set_ylabel("Average sink waste (%)")
-    _cross_axes[0].set_title("Sinks Across Architectures")
+    _cross_axes[0].set_title("Sink Waste: Depth Matters")
     _cross_axes[0].set_ylim(0, 60)
 
     _cross_axes[1].bar(
@@ -1491,8 +1491,8 @@ def the_insight(data, mo, np, plt):
     for _i, _v in enumerate(_model_sick_pct):
         _cross_axes[1].text(_i, _v + 0.3, f"{_v}%", ha="center", fontweight="bold")
     _cross_axes[1].set_ylabel("Sick heads (%)")
-    _cross_axes[1].set_title("Sick Head Ratio: Consistent Across Families")
-    _cross_axes[1].set_ylim(0, 15)
+    _cross_axes[1].set_title("Head Specialization: Universal")
+    _cross_axes[1].set_ylim(0, max(_model_sick_pct) * 1.3)
     plt.tight_layout()
 
     # --- Download button ---
@@ -1543,10 +1543,12 @@ spot gets more use as the model gets smarter.
             mo.md("### Cross-Model Validation"),
             _fig_cross,
             mo.md("""
-Validated on **Pythia-70M** — a different architecture family (GPT-NeoX,
-rotary embeddings, parallel attention+FF). Despite different design choices,
-the structural pattern is identical: sinks emerge, sick head ratio stays ~10%.
-This isn't a GPT-2 quirk. It's a pre-norm transformer property.
+**Pythia-70M** (GPT-NeoX, rotary embeddings, parallel attention+FF) tells a
+different story: sink waste drops to ~3%, but nearly half its heads are "sick"
+by the entropy metric. With only 6 layers, Pythia doesn't develop the deep-layer
+sink pattern GPT-2 shows — confirming that sinks scale with depth, not just
+architecture. The *need* for head specialization is universal; the *form* it
+takes depends on how many layers the model has to work with.
 """),
             mo.accordion({
                 "Open questions": mo.md("""
