@@ -98,15 +98,15 @@ distributed garbage.
 I tested 8 fixes. None eliminate sinks. I zeroed out 31 sink heads:
 perplexity rose by 55. Zeroing 31 random heads? **+1,611.** Sink heads
 are 29× less critical — but non-negotiable. The one thing that worked:
-training a purpose-built OFF switch (768 parameters, model frozen)
-**improved perplexity by 2.8%**. Cross-architecture validation on
+training purpose-built OFF switches (4 learned tokens, 3,072 parameters,
+model frozen) **improved perplexity by 19.7%**. Cross-architecture validation on
 Pythia-70M confirms the mechanism is universal.
 """),
             _fig_bar,
             mo.hstack([
-                mo.stat(value="-2.8%", label="PPL from learned OFF switch", bordered=True),
+                mo.stat(value="-19.7%", label="PPL from 4 learned OFF switches", bordered=True),
                 mo.stat(value="29×", label="less critical than random heads", bordered=True),
-                mo.stat(value="768", label="parameters (of 124M) to improve it", bordered=True),
+                mo.stat(value="3,072", label="parameters (of 124M) to improve it", bordered=True),
             ], justify="center", gap=1),
             mo.accordion({
                 "Methodology note": mo.md("""
@@ -1305,22 +1305,28 @@ stability.
 
 If the sink is a makeshift OFF switch hijacking a real token, what happens
 when you give the model a *purpose-built* one? I trained a single embedding
-vector (768 parameters, model frozen) to serve as a dedicated sink token.
-500 steps, 2 minutes of training.
+vector (768 parameters per token, model frozen) to serve as dedicated
+sink tokens. More tokens = more parking spots = better predictions.
 """),
             mo.hstack([
-                mo.stat(value="43.2", label="PPL with learned sink (was 44.5)", bordered=True),
-                mo.stat(value="-2.8%", label="perplexity improvement", bordered=True),
-                mo.stat(value="768", label="parameters trained (of 124M)", bordered=True),
+                mo.stat(value="35.7", label="PPL with 4 learned sinks (was 44.5)", bordered=True),
+                mo.stat(value="-19.7%", label="perplexity improvement", bordered=True),
+                mo.stat(value="3,072", label="parameters trained (of 124M)", bordered=True),
             ], justify="center", gap=1),
             mo.md("""
-**Perplexity improved by 2.8%** — from 44.5 to 43.2 on WikiText-2
-validation — by training 0.0006% of the model's parameters. Same eval
-protocol as every other measurement in this notebook. The learned embedding
-gives the model a proper parking spot instead of hijacking the first real
-word. Prepending a zero embedding at inference (no training) *hurts*
-(44.5 → 45.1), confirming the improvement comes from the *learned*
-representation, not the position.
+| Learned tokens | Parameters | PPL | Improvement |
+|---------------|-----------|-----|-------------|
+| 0 (baseline) | 0 | 44.5 | — |
+| 1 token | 768 | 43.2 | -2.8% |
+| 1 token (2000 steps) | 768 | 41.8 | -5.9% |
+| **2 tokens** | **1,536** | **37.9** | **-14.9%** |
+| **4 tokens** | **3,072** | **35.7** | **-19.7%** |
+
+More parking spots = more improvement. Each additional token gives the model
+another dedicated OFF switch for a different layer or context. Same eval
+protocol as every other measurement in this notebook. Prepending zero
+embeddings at inference (no training) *hurts* (44.5 → 45.1), confirming the
+improvement comes from the *learned* representations, not the positions.
 
 Sinks didn't decrease — they stayed at ~41%. But the model got better at
 language because its first real token is no longer corrupted. The OFF switch

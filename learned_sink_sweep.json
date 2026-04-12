@@ -1,0 +1,59 @@
+{
+  "baseline": 44.4578,
+  "variants": [
+    {
+      "label": "1tok/500/5e-3 (original)",
+      "n_tokens": 1,
+      "steps": 500,
+      "lr": 0.005,
+      "ppl": 43.2077,
+      "improvement_pct": 2.81,
+      "time_s": 287.1
+    },
+    {
+      "label": "1tok/2000/5e-3",
+      "n_tokens": 1,
+      "steps": 2000,
+      "lr": 0.005,
+      "ppl": 41.8156,
+      "improvement_pct": 5.94,
+      "time_s": 733.4
+    },
+    {
+      "label": "1tok/2000/1e-3",
+      "n_tokens": 1,
+      "steps": 2000,
+      "lr": 0.001,
+      "ppl": 43.0591,
+      "improvement_pct": 3.15,
+      "time_s": 648.5
+    },
+    {
+      "label": "1tok/5000/1e-3",
+      "n_tokens": 1,
+      "steps": 5000,
+      "lr": 0.001,
+      "ppl": 42.1276,
+      "improvement_pct": 5.24,
+      "time_s": 1201.5
+    },
+    {
+      "label": "2tok/2000/5e-3",
+      "n_tokens": 2,
+      "steps": 2000,
+      "lr": 0.005,
+      "ppl": 37.8562,
+      "improvement_pct": 14.85,
+      "time_s": 674.8
+    },
+    {
+      "label": "4tok/2000/5e-3",
+      "n_tokens": 4,
+      "steps": 2000,
+      "lr": 0.005,
+      "ppl": 35.7135,
+      "improvement_pct": 19.67,
+      "time_s": 796.3
+    }
+  ]
+}
