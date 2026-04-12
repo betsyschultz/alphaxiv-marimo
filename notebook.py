@@ -1470,7 +1470,7 @@ def adaptive_viz(data, mo, np, plt, adapt_strength):
     _all_ent = np.stack([_ent_std, _ent_fixed])
     _vmin, _vmax = _all_ent.min(), _all_ent.max()
 
-    _fig, _axes = plt.subplots(1, 2, figsize=(12, 5))
+    _fig, _axes = plt.subplots(1, 2, figsize=(12, 6), layout="constrained")
     _axes[0].imshow(_ent_std, cmap="RdBu", aspect="auto", vmin=_vmin, vmax=_vmax)
     _axes[0].set_title("Before (standard)", fontsize=12, fontweight="bold")
     _axes[0].set_xlabel("Head")
@@ -1487,10 +1487,9 @@ def adaptive_viz(data, mo, np, plt, adapt_strength):
     _axes[1].set_xticks(range(_n_h))
     _axes[1].set_yticks(range(_n_l))
     _fig.colorbar(
-        _im, ax=_axes, orientation="horizontal", shrink=0.6, pad=0.12,
+        _im, ax=_axes, orientation="horizontal", shrink=0.5, pad=0.08,
         label="Entropy (red=sick, blue=healthy)",
     )
-    plt.tight_layout()
 
     mo.output.replace(
         mo.vstack([
