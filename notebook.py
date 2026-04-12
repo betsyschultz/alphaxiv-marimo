@@ -1369,43 +1369,46 @@ def ablation_centerpiece(data, mo, np, plt):
         with open(_os.path.join(_dir, "cumulative_ablation.json")) as _f:
             _cum = _json.load(_f)
 
-        _fig_cum, _ax_cum = plt.subplots(figsize=(10, 5))
+        import plotly.graph_objects as _go_cum
+
+        _fig_cum = _go_cum.Figure()
         _style = {
-            "sink_first": ("#2ecc71", "o-", "Sink heads first (least critical)"),
-            "random": ("#95a5a6", "s--", "Random order"),
-            "important_first": ("#e74c3c", "^-", "Important heads first (most critical)"),
+            "sink_first": ("#2ecc71", "Sink heads first (least critical)"),
+            "random": ("#95a5a6", "Random order"),
+            "important_first": ("#e74c3c", "Important heads first (most critical)"),
         }
-        for _curve_name, (_color, _marker, _label) in _style.items():
+        for _curve_name, (_color, _label) in _style.items():
             _curve = _cum["curves"][_curve_name]
             _xs = np.array([p["n_heads"] for p in _curve])
             _ys = np.array([p["perplexity"] for p in _curve])
-            # Raw data points (faded)
-            _ax_cum.plot(
-                _xs, _ys, _marker, color=_color, alpha=0.35,
-                linewidth=1, markersize=5,
-            )
-            # Smoothed trend line (3-point rolling mean)
             _ys_smooth = np.convolve(_ys, np.ones(3)/3, mode="same")
             _ys_smooth[0] = _ys[0]
             _ys_smooth[-1] = _ys[-1]
-            _ax_cum.plot(
-                _xs, _ys_smooth, "-", color=_color,
-                linewidth=3, label=_label,
-            )
-
-        # Mark the n=30 comparison point
-        _ax_cum.axvline(x=30, color="#888", linestyle=":", alpha=0.5, linewidth=1)
-        _ax_cum.text(31, _ax_cum.get_ylim()[0] * 1.5, "n=30\n(ablation\ntest)", fontsize=8, color="#888")
-
-        _ax_cum.set_xlabel("Number of heads removed (of 144)", fontsize=12)
-        _ax_cum.set_ylabel("Perplexity", fontsize=12)
-        _ax_cum.set_title(
-            "The Shape of Failure", fontsize=14, fontweight="bold",
+            # Raw points (faded)
+            _fig_cum.add_trace(_go_cum.Scatter(
+                x=_xs, y=_ys, mode="markers", marker=dict(color=_color, size=6, opacity=0.35),
+                showlegend=False, hovertext=[f"n={x}: PPL={y:.0f}" for x, y in zip(_xs, _ys)],
+                hoverinfo="text",
+            ))
+            # Smoothed trend
+            _fig_cum.add_trace(_go_cum.Scatter(
+                x=_xs, y=_ys_smooth, mode="lines", line=dict(color=_color, width=3),
+                name=_label,
+                hovertext=[f"{_label}<br>n={x}: PPL≈{y:.0f}" for x, y in zip(_xs, _ys_smooth)],
+                hoverinfo="text",
+            ))
+        # n=30 reference line
+        _fig_cum.add_vline(x=30, line_dash="dot", line_color="#888", opacity=0.5,
+                           annotation_text="n=30 (ablation test)", annotation_position="top right",
+                           annotation_font_size=10, annotation_font_color="#888")
+        _fig_cum.update_layout(
+            title=dict(text="The Shape of Failure", font=dict(size=16)),
+            xaxis=dict(title="Number of heads removed (of 144)"),
+            yaxis=dict(title="Perplexity", type="log", gridcolor="#eee"),
+            plot_bgcolor="#fafafa", paper_bgcolor="#fafafa",
+            height=420, margin=dict(t=60, b=60),
+            legend=dict(x=0.02, y=0.98, bgcolor="rgba(255,255,255,0.8)"),
         )
-        _ax_cum.legend(fontsize=10)
-        _ax_cum.set_yscale("log")
-        _ax_cum.grid(True, alpha=0.2)
-        plt.tight_layout()
 
         _cumulative_elements = [
             _fig_cum,
