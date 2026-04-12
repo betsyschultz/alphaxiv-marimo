@@ -1319,12 +1319,21 @@ def ablation_centerpiece(data, mo, np, plt):
     )
     _ax.set_yscale("log")
     _ax.set_ylabel("Perplexity (log scale)", fontsize=12)
-    _ax.set_title("What Happens When You Remove Heads?", fontsize=14, fontweight="bold")
+    _ax.set_title("What Happens When You Remove Heads?", fontsize=14, fontweight="bold", pad=15)
     for _bar, _ppl in zip(_bars, _ppls):
-        _ax.text(
-            _bar.get_x() + _bar.get_width() / 2, _ppl * 1.15,
-            f"{_ppl:.0f}", ha="center", va="bottom", fontsize=12, fontweight="bold",
-        )
+        # Place label inside bar if it would overlap the title
+        if _ppl > 500:
+            _ax.text(
+                _bar.get_x() + _bar.get_width() / 2, _ppl * 0.7,
+                f"{_ppl:,.0f}", ha="center", va="top", fontsize=12,
+                fontweight="bold", color="white",
+            )
+        else:
+            _ax.text(
+                _bar.get_x() + _bar.get_width() / 2, _ppl * 1.15,
+                f"{_ppl:.0f}", ha="center", va="bottom", fontsize=12,
+                fontweight="bold",
+            )
     _ax.grid(True, alpha=0.15, axis="y")
     plt.tight_layout()
 
