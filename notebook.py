@@ -211,6 +211,7 @@ def precompute():
             # Model loaded lazily in try-it-yourself cell
             _model = None
             _tokenizer = None
+            _adaptive_validation = None  # computed only on cold start
     else:
         # --- Full computation with progress ---
         with mo.status.spinner("Loading GPT-2...") as _status:
@@ -318,6 +319,86 @@ def precompute():
 
             # Temperature computed on-the-fly in fix_comparison cell (fast numpy softmax)
 
+            # --- Adaptive temperature validation (one modified forward pass) ---
+            _status.update("Validating adaptive fix...")
+            _ent_std = _entropy(_standard_attn)
+            _med_ent = np.median(_ent_std)
+            _thresh_ent = _med_ent * 0.7
+            _t_map = np.ones_like(_ent_std)
+            _sick_mask = _ent_std < _thresh_ent
+            _t_map[_sick_mask] = np.clip(
+                1.0 + (_med_ent / _ent_std[_sick_mask] - 1.0), 1.0, 5.0
+            )
+
+            # Hook: capture QKV, recompute attention with per-head temperature
+            _adapt_qkv = {}
+
+            def _adapt_capture(li):
+                def _h(mod, inp, out):
+                    _adapt_qkv[li] = out.detach()
+                return _h
+
+            def _adapt_replace(li):
+                def _h(mod, args):
+                    _qkv = _adapt_qkv[li]
+                    _q, _k, _v = _qkv.split(_d_model, dim=-1)
+                    _bsz, _sl2 = _q.shape[0], _q.shape[1]
+                    _q = _q.view(_bsz, _sl2, _n_heads, _d_head).transpose(1, 2)
+                    _k = _k.view(_bsz, _sl2, _n_heads, _d_head).transpose(1, 2)
+                    _v = _v.view(_bsz, _sl2, _n_heads, _d_head).transpose(1, 2)
+                    _sc = torch.matmul(_q, _k.transpose(-2, -1)) / (_d_head ** 0.5)
+                    for _hi in range(_n_heads):
+                        if _t_map[li, _hi] > 1.0:
+                            _sc[:, _hi] = _sc[:, _hi] / _t_map[li, _hi]
+                    _cm = torch.tril(torch.ones(_sl2, _sl2)).unsqueeze(0).unsqueeze(0)
+                    _sc = _sc.masked_fill(_cm == 0, float("-inf"))
+                    _aw = torch.nn.functional.softmax(_sc, dim=-1)
+                    _ao = torch.matmul(_aw, _v)
+                    _ao = _ao.transpose(1, 2).contiguous().view(_bsz, _sl2, _d_model)
+                    return (_ao,) + args[1:]
+                return _h
+
+            _adapt_hooks = []
+            for _i, _block in enumerate(_model.transformer.h):
+                _adapt_hooks.append(
+                    _block.attn.c_attn.register_forward_hook(_adapt_capture(_i))
+                )
+                _adapt_hooks.append(
+                    _block.attn.c_proj.register_forward_pre_hook(_adapt_replace(_i))
+                )
+
+            with torch.no_grad():
+                _adapt_out = _model(**_inputs)
+
+            for _h in _adapt_hooks:
+                _h.remove()
+
+            # Compare logits
+            _std_logits = _standard_out.logits[0]
+            _adp_logits = _adapt_out.logits[0]
+            _std_top = _std_logits.argmax(dim=-1)
+            _adp_top = _adp_logits.argmax(dim=-1)
+            _top1_match = float((_std_top == _adp_top).float().mean())
+
+            # Perplexity on input text
+            _adp_loss = torch.nn.functional.cross_entropy(
+                _adp_logits[:-1], _inputs["input_ids"][0, 1:],
+            )
+            _std_loss = torch.nn.functional.cross_entropy(
+                _std_logits[:-1], _inputs["input_ids"][0, 1:],
+            )
+            import math as _math
+            _adaptive_ppl = _math.exp(float(_adp_loss))
+            _standard_ppl_input = _math.exp(float(_std_loss))
+
+            _adaptive_validation = {
+                "temp_map": _t_map,
+                "adaptive_ppl": round(_adaptive_ppl, 2),
+                "standard_ppl_input": round(_standard_ppl_input, 2),
+                "top1_match": round(_top1_match * 100, 1),
+                "n_treated": int(_sick_mask.sum()),
+            }
+
             # --- Save cache (compact — no temp sweep) ---
             _status.update("Saving cache...")
             np.savez_compressed(_cache_path, **{
@@ -365,6 +446,7 @@ def precompute():
         "tokenizer": _tokenizer,
         "elapsed": time.time() - _start,
         "from_cache": _from_cache,
+        "adaptive_validation": _adaptive_validation,
         "colors": {
             "standard": _C_STD,
             "temp": _C_TEMP,
@@ -1423,7 +1505,156 @@ for just {_n_diffuse} heads) are the *most* important per-head. All in layers 0-
 
 
 # ============================================================================
-# CELL 10: THE INSIGHT — WHY SINKS EXIST
+# CELL 10: ADAPTIVE FIX CONTROLS
+# ============================================================================
+
+@app.cell
+def adaptive_controls(mo):
+    adapt_strength = mo.ui.slider(
+        start=0.0, stop=2.0, step=0.05, value=1.0,
+        label="Treatment strength", show_value=True,
+    )
+
+    mo.output.replace(
+        mo.vstack([
+            mo.md("""
+## The Adaptive Fix: Can We Heal Sick Heads?
+
+The notebook diagnosed which heads are sick. What if the diagnosis *is* the
+treatment? For each sick head, we scale its pre-softmax scores by a
+per-head temperature proportional to how far below the healthy threshold
+it falls. Healthy heads are untouched.
+
+```python
+T_h = 1 + strength × (median_entropy / head_entropy - 1)
+fixed_scores = raw_scores / T_h  # only for sick heads
+```
+
+Drag the slider to control treatment strength. Watch the entropy grid heal.
+"""),
+            mo.callout(adapt_strength, kind="info"),
+        ])
+    )
+    return (adapt_strength,)
+
+
+# ============================================================================
+# CELL 11: ADAPTIVE FIX VISUALIZATION
+# ============================================================================
+
+@app.cell(hide_code=True)
+def adaptive_viz(data, mo, np, plt, adapt_strength):
+    from matplotlib.patches import Rectangle as _Rect
+
+    _ent_std = data["entropy_standard"]
+    _median = np.median(_ent_std)
+    _threshold = _median * 0.7
+    _n_l = data["n_layers"]
+    _n_h = data["n_heads"]
+    _strength = adapt_strength.value
+
+    # --- Compute per-head temperature map ---
+    _t_map = np.ones((_n_l, _n_h))
+    _sick = _ent_std < _threshold
+    if _strength > 0 and _sick.any():
+        _t_map[_sick] = np.clip(
+            1.0 + _strength * (_median / _ent_std[_sick] - 1.0), 1.0, 5.0,
+        )
+
+    # --- Apply temperature to raw scores, recompute softmax ---
+    _raw = data["raw_scores_all"]
+    _fixed = _raw.copy()
+    for _li in range(_n_l):
+        for _hi in range(_n_h):
+            if _t_map[_li, _hi] > 1.0:
+                _fixed[_li, _hi] = _raw[_li, _hi] / _t_map[_li, _hi]
+    _exp = np.exp(_fixed - _fixed.max(axis=-1, keepdims=True))
+    _fixed_attn = _exp / _exp.sum(axis=-1, keepdims=True)
+
+    # --- Entropy of fixed attention ---
+    _p = np.clip(_fixed_attn, 1e-9, 1.0)
+    _ent_fixed = -(_p * np.log(_p)).sum(axis=-1).mean(axis=-1)
+
+    # --- Stats ---
+    _n_sick_before = int(_sick.sum())
+    _n_sick_after = int((_ent_fixed < _threshold).sum())
+    _healed = _n_sick_before - _n_sick_after
+    _sink_before = data["sink_mag_standard"].mean() * 100
+    _sink_after = _fixed_attn[:, :, :, 0].mean(axis=(1, 2)).mean() * 100
+
+    # --- Dual entropy grids ---
+    _all_ent = np.stack([_ent_std, _ent_fixed])
+    _vmin, _vmax = _all_ent.min(), _all_ent.max()
+
+    _fig, _axes = plt.subplots(1, 2, figsize=(12, 5))
+    _axes[0].imshow(_ent_std, cmap="RdBu", aspect="auto", vmin=_vmin, vmax=_vmax)
+    _axes[0].set_title("Before (standard)", fontsize=12, fontweight="bold")
+    _axes[0].set_xlabel("Head")
+    _axes[0].set_ylabel("Layer")
+    _axes[0].set_xticks(range(_n_h))
+    _axes[0].set_yticks(range(_n_l))
+
+    _axes[1].imshow(_ent_fixed, cmap="RdBu", aspect="auto", vmin=_vmin, vmax=_vmax)
+    _axes[1].set_title(
+        f"After (strength={_strength:.2f})", fontsize=12, fontweight="bold",
+    )
+    _axes[1].set_xlabel("Head")
+    _axes[1].set_ylabel("Layer")
+    _axes[1].set_xticks(range(_n_h))
+    _axes[1].set_yticks(range(_n_l))
+    plt.colorbar(
+        _axes[1].images[0], ax=_axes, shrink=0.8,
+        label="Entropy (red=sick, blue=healthy)",
+    )
+    plt.tight_layout()
+
+    # --- Validation callout ---
+    _val = data["adaptive_validation"]
+    _val_elements = []
+    if _val is not None:
+        _val_elements = [
+            mo.hstack([
+                mo.stat(
+                    value=f"{_val['adaptive_ppl']:.1f}",
+                    label=f"PPL with fix (baseline: {_val['standard_ppl_input']:.1f})",
+                    bordered=True,
+                ),
+                mo.stat(
+                    value=f"{_val['top1_match']}%",
+                    label="top-1 token agreement",
+                    bordered=True,
+                ),
+                mo.stat(
+                    value=f"{_healed}",
+                    label=f"heads healed (of {_n_sick_before} sick)",
+                    bordered=True,
+                ),
+            ], justify="center", gap=1),
+            mo.callout(
+                mo.md(f"""
+**Validated with a real modified forward pass** (strength=1.0). The model's
+top-1 predictions match {_val['top1_match']}% of the time. Perplexity goes
+from {_val['standard_ppl_input']} → {_val['adaptive_ppl']}.
+{"The fix barely changes the output — the model routes around the treatment, confirming sinks are load-bearing." if _val['top1_match'] > 90 else "The fix changes the output meaningfully — some of these sinks were genuinely wasting capacity."}
+"""),
+                kind="success" if _val["top1_match"] > 90 else "warn",
+            ),
+        ]
+
+    mo.output.replace(
+        mo.vstack([
+            _fig,
+            mo.md(f"""
+**Sick heads:** {_n_sick_before} → {_n_sick_after} ({_healed} healed) ·
+**Sink waste:** {_sink_before:.1f}% → {_sink_after:.1f}%
+"""),
+            *_val_elements,
+        ])
+    )
+
+
+# ============================================================================
+# CELL 12: THE INSIGHT — WHY SINKS EXIST
 # ============================================================================
 
 @app.cell(hide_code=True)
