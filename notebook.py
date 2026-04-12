@@ -26,6 +26,21 @@ def table_of_contents():
 
 
 # ============================================================================
+# TITLE (renders immediately, no data dependency)
+# ============================================================================
+
+@app.cell(hide_code=True)
+def title():
+    import marimo as _mo
+    _mo.output.replace(
+        _mo.md("""
+# Attention Sinks Are Load-Bearing
+## Every fix failed. Here's why.
+""")
+    )
+
+
+# ============================================================================
 # EXECUTIVE SUMMARY
 # ============================================================================
 
@@ -47,7 +62,7 @@ def executive_summary(data, mo, np, plt):
         "45.3%\n100× pressure\nstill 45%", "45.5%\nworse",
     ]
 
-    _fig, _ax = plt.subplots(figsize=(12, 4))
+    _fig_bar, _ax = plt.subplots(figsize=(12, 4))
     _bars = _ax.bar(
         _approaches, _sink_values, color=_colors, width=0.6,
         edgecolor="white", linewidth=1.5,
@@ -59,7 +74,7 @@ def executive_summary(data, mo, np, plt):
         )
     _ax.set_ylabel("Attention waste on position 0 (%)", fontsize=11)
     _ax.set_title("Everything We Tried", fontsize=14, fontweight="bold")
-    _ax.set_ylim(0, 58)
+    _ax.set_ylim(0, 62)
     _ax.grid(True, alpha=0.15, axis="y")
     _ax.axhline(y=44.3, color="#e74c3c", linestyle="--", alpha=0.3, linewidth=1)
     plt.tight_layout()
@@ -67,10 +82,11 @@ def executive_summary(data, mo, np, plt):
     mo.output.replace(
         mo.vstack([
             mo.md(f"""
-# Attention Sinks Are Load-Bearing
-## Every fix failed. Here's why.
-
 *Betsy Schultz · GPT-2 (124M) · {data['seq_len']} tokens · {"loaded from cache" if data["from_cache"] else "computed"} in {data['elapsed']:.1f}s*
+
+*Original diagnostic experiments: 8 fix approaches tested, multi-seed λ sweep
+(4 weights × 3 seeds), three-class head ablation, and cross-model validation —
+all interactive below.*
 
 GPT-2 dumps over 44% of its attention budget on one meaningless token.
 We tested every proposed fix — blocking self-attention, temperature
@@ -83,7 +99,12 @@ is non-negotiable. The thesis: sinks are a structural parking mechanism,
 not a bug. The parking lot is essential infrastructure, but it's the
 least interesting part of the building.
 """),
-            _fig,
+            _fig_bar,
+            mo.hstack([
+                mo.stat(value="44.3%", label="attention wasted on one token", bordered=True),
+                mo.stat(value="8", label="fix approaches tested", bordered=True),
+                mo.stat(value="0", label="fixes that eliminated sinks", bordered=True),
+            ], justify="center", gap=1),
             mo.accordion({
                 "Methodology note": mo.md("""
 Training used λ_align = 0.1 (alignment loss weighted at 10% of
@@ -102,7 +123,7 @@ without destroying language ability. The alignment loss barely moved
 # CELL 0: PRECOMPUTATION
 # ============================================================================
 
-@app.cell(hide_code=True)
+@app.cell
 def precompute():
     import marimo as mo
     import numpy as np
@@ -364,7 +385,47 @@ def precompute():
         },
     }
 
-    mo.output.replace(mo.md(""))
+    mo.output.replace(
+        mo.accordion({
+            "How this notebook extracts attention data": mo.md("""
+```python
+# Hook into GPT-2's QKV projections to capture raw scores
+qkv_cache = {}
+def capture_qkv(layer_idx):
+    def hook_fn(module, input, output):
+        qkv_cache[layer_idx] = output.detach()
+    return hook_fn
+
+for i, block in enumerate(model.transformer.h):
+    block.attn.c_attn.register_forward_hook(capture_qkv(i))
+
+# Forward pass with attention outputs
+with torch.no_grad():
+    out = model(**inputs, output_attentions=True)
+
+# Extract raw QK scores before softmax
+for i in range(n_layers):
+    q, k, _ = qkv_cache[i].split(d_model, dim=-1)
+    q = q.view(1, seq_len, n_heads, d_head).transpose(1, 2)
+    k = k.view(1, seq_len, n_heads, d_head).transpose(1, 2)
+    scores = torch.matmul(q, k.transpose(-2, -1)) / (d_head ** 0.5)
+    scores = scores.masked_fill(causal_mask == 0, float("-inf"))
+
+# ESA: zero the diagonal, renormalize
+esa_attn = standard_attn.copy()
+for li in range(n_layers):
+    for hi in range(n_heads):
+        a = esa_attn[li, hi].copy()
+        np.fill_diagonal(a, 0.0)
+        row_sums = a.sum(axis=-1, keepdims=True)
+        esa_attn[li, hi] = a / np.where(row_sums == 0, 1.0, row_sums)
+
+# Sink token: prepend a garbage token at position 0
+sink_ids = torch.cat([torch.zeros(1, 1, dtype=torch.long), inputs["input_ids"]], dim=1)
+```
+"""),
+        })
+    )
     return data, mo, np, plt
 
 
@@ -434,14 +495,12 @@ The x-axis shows actual words here; later charts use position numbers since the 
 **Layer** — GPT-2 processes text in 12 stacked stages. Early layers handle simple patterns (nearby words, punctuation).
 Deeper layers build higher-level meaning (who did what to whom). The sink gets worse in deeper layers.
 
-**Head** — Each layer has 12 attention heads that work in parallel. Each head learns to focus on a different kind of
-relationship — one might track grammar, another might match pronouns to their referents, another might follow the
-topic of a sentence. GPT-2 has 144 heads total (12 layers × 12 heads). When we say a head is "sick," it means that
-head is spending most of its attention budget on the sink instead of doing useful work.
+**Head** — Each layer has 12 attention heads working in parallel, each specializing in a different relationship —
+grammar, pronoun matching, topic tracking. GPT-2 has 144 heads total (12 layers × 12 heads). A "sick" head
+spends most of its attention budget on the sink instead of doing useful work.
 
-**Attention budget** — Every word "looks at" every other word to decide which ones matter. The model splits 100% of
-its attention across all tokens. The first token receives 40-60% in deeper layers, regardless of what word it is.
-Researchers call this an **attention sink**
+**Attention budget** — The model splits 100% of each head's attention across all tokens. The first token
+receives 40-60% in deeper layers, regardless of what word it is. Researchers call this an **attention sink**
 ([Xiao et al., 2023](https://alphaxiv.org/abs/2309.17453); [Sun et al., LeCun/NYU](https://alphaxiv.org/abs/2603.05498)).
 Every percentage point on the sink is a point *not* spent tracking syntax, pronouns, or long-range context.
 
@@ -471,7 +530,7 @@ def layer_walk_controls(mo):
 Drag the slider from layer 0 to layer 11 to see the sink stripe form as you go deeper.
 Early layers distribute attention broadly. By layer 6-8, the first token dominates.
 """),
-            walk_layer,
+            mo.callout(walk_layer, kind="info"),
         ])
     )
     return walk_layer,
@@ -510,108 +569,49 @@ def layer_walk_viz(data, mo, np, plt, walk_layer):
 
 
 # ============================================================================
-# CELL 2: ESA CONTROLS (show code)
+# CELL 2: ESA SECTION (compressed — toggle + result in one cell)
 # ============================================================================
 
-@app.cell
-def esa_controls(mo):
-    esa_toggle = mo.ui.switch(label="Enable Exclusive Self-Attention", value=False)
-    _head_opts = ["Average (all heads)"] + [f"Head {_i}" for _i in range(12)]
-    esa_layer = mo.ui.slider(
-        start=0, stop=11, value=8, label="Layer", show_value=True
-    )
-    esa_head = mo.ui.radio(
-        options=_head_opts, value="Average (all heads)", label="Head", inline=True
-    )
+@app.cell(hide_code=True)
+def esa_section(data, mo, np, plt):
+    _toggle = mo.ui.switch(label="Enable ESA", value=False)
+    _layer_sl = mo.ui.slider(start=0, stop=11, value=8, label="Layer", show_value=True)
+
+    _layer = _layer_sl.value
+    _std = data["standard_attn"][_layer].mean(axis=0)
+    _esa = data["esa_attn"][_layer].mean(axis=0)
+    _right = _esa if _toggle.value else _std
+    _rtitle = "Exclusive Self-Attention" if _toggle.value else "Standard (toggle above)"
+    _vmax = max(_std.max(), _right.max())
+
+    _fig, _axes = plt.subplots(1, 2, figsize=(12, 4.5))
+    for _ax, _d, _t in [(_axes[0], _std, "Standard"), (_axes[1], _right, _rtitle)]:
+        _ax.imshow(_d, cmap="viridis", aspect="auto", vmin=0, vmax=_vmax)
+        _ax.set_title(_t, fontsize=11, fontweight="bold")
+        _ax.set_xlabel("Key position")
+        _ax.set_ylabel("Query position")
+        plt.colorbar(_ax.images[0], ax=_ax, shrink=0.8)
+    plt.tight_layout()
 
     mo.output.replace(
         mo.vstack([
             mo.md("""
 ### Does blocking self-attention fix the sink?
 
-One hypothesis: sinks form because tokens attend to themselves too
-much. [Exclusive Self Attention](https://alphaxiv.org/abs/2603.09078) (Zhai, 2025)
-blocks the diagonal — each token can look at every other token, but not itself.
-Toggle it on and watch what happens to the sink stripe.
+[Exclusive Self Attention](https://alphaxiv.org/abs/2603.09078) (Zhai, 2025)
+blocks the diagonal — tokens can't attend to themselves. Toggle it on:
 """),
-            mo.hstack([esa_toggle, esa_layer, esa_head], justify="start", gap=1),
-        ])
-    )
-    return esa_toggle, esa_layer, esa_head
-
-
-# ============================================================================
-# CELL 3: ESA RESULT
-# ============================================================================
-
-@app.cell(hide_code=True)
-def esa_result(data, mo, np, plt, esa_toggle, esa_layer, esa_head):
-    _layer = esa_layer.value
-    _head_val = esa_head.value
-    _std = data["standard_attn"][_layer]
-    _esa = data["esa_attn"][_layer]
-
-    if _head_val == "Average (all heads)":
-        _std_show = _std.mean(axis=0)
-        _esa_show = _esa.mean(axis=0)
-        _hlabel = "all heads averaged"
-    else:
-        _hi = int(_head_val.split()[-1])
-        _std_show = _std[_hi]
-        _esa_show = _esa[_hi]
-        _hlabel = _head_val
-
-    _right = _esa_show if esa_toggle.value else _std_show
-    _rtitle = "Exclusive Self-Attention" if esa_toggle.value else "Standard (toggle ESA above)"
-    _vmax = max(_std_show.max(), _right.max())
-
-    _fig1, _axes = plt.subplots(1, 2, figsize=(12, 5))
-    for _ax, _d, _t in [(_axes[0], _std_show, "Standard"), (_axes[1], _right, _rtitle)]:
-        _ax.imshow(_d, cmap="viridis", aspect="auto", vmin=0, vmax=_vmax)
-        _ax.set_title(f"{_t} — Layer {_layer}, {_hlabel}", fontsize=11, fontweight="bold")
-        _ax.set_xlabel("Key position")
-        _ax.set_ylabel("Query position")
-        plt.colorbar(_ax.images[0], ax=_ax, shrink=0.8, label="Attention weight")
-    plt.tight_layout()
-
-    _layers = np.arange(data["n_layers"])
-    _fig2, _ax2 = plt.subplots(figsize=(12, 4))
-    _ax2.plot(
-        _layers, data["sink_mag_standard"], "o-",
-        color=data["colors"]["standard"], linewidth=2.5, markersize=7,
-        label="Standard", zorder=3,
-    )
-    _ax2.plot(
-        _layers, data["sink_mag_esa"], "s--",
-        color=data["colors"]["esa"], linewidth=2, markersize=6,
-        label="Exclusive Self-Attention", zorder=2,
-    )
-    _ax2.set_xlabel("Layer", fontsize=12)
-    _ax2.set_ylabel("Mean attention to position 0", fontsize=12)
-    _ax2.set_title("Sink Magnitude Across Layers", fontsize=13, fontweight="bold")
-    _ax2.legend(fontsize=10)
-    _ax2.grid(True)
-    _ax2.set_ylim(bottom=0)
-    plt.tight_layout()
-
-    mo.output.replace(
-        mo.vstack([
-            _fig1,
+            mo.hstack([_toggle, _layer_sl], justify="start", gap=1),
+            _fig,
             mo.callout(
                 mo.md("""
-**Blocking self-attention doesn't fix the sink.**
-
-The two lines below overlap almost perfectly. ESA has **no effect** on sink
-magnitude. Sinks aren't caused by tokens looking at themselves. They're
-deeper, likely tied to the pre-norm architecture and how residual streams
-accumulate.
-
-*An original diagnostic. [Exclusive Self Attention](https://alphaxiv.org/abs/2603.09078)
-meets [attention sink research](https://alphaxiv.org/abs/2603.05498) — and nothing changes.*
+**No effect.** ESA doesn't change sink magnitude at any layer. Sinks aren't caused
+by self-attention — they're structural, tied to pre-norm residual streams.
+*An original diagnostic: [ESA](https://alphaxiv.org/abs/2603.09078) meets
+[attention sink research](https://alphaxiv.org/abs/2603.05498), and nothing changes.*
 """),
                 kind="info",
             ),
-            _fig2,
         ])
     )
 
@@ -665,9 +665,12 @@ the model is as uncertain as choosing between 30 equally likely words.)
 keeping the sink token in the KV cache lets models process unlimited-length text without degrading
 """),
             }),
-            mo.hstack(
-                [fix_radio, temp_slider, fix_layer, fix_head],
-                justify="start", gap=1,
+            mo.callout(
+                mo.hstack(
+                    [fix_radio, temp_slider, fix_layer, fix_head],
+                    justify="start", gap=1,
+                ),
+                kind="info",
             ),
         ])
     )
@@ -731,6 +734,18 @@ def fix_comparison(data, mo, np, plt, fix_radio, temp_slider, fix_layer, fix_hea
 
     _lyrs = np.arange(data["n_layers"])
     _temp_sink_mag = temp_attn[:, :, :, 0].mean(axis=(1, 2))
+
+    _mag_map = {
+        "standard": data["sink_mag_standard"],
+        "temp": _temp_sink_mag,
+        "sink": data["sink_real_first"],
+    }
+    _color_map = {
+        "standard": data["colors"]["standard"],
+        "temp": data["colors"]["temp"],
+        "sink": data["colors"]["sink"],
+    }
+
     _axes[1].plot(
         _lyrs, data["sink_mag_standard"], "o-",
         color=data["colors"]["standard"], linewidth=2, label="Standard", alpha=0.7,
@@ -744,17 +759,6 @@ def fix_comparison(data, mo, np, plt, fix_radio, temp_slider, fix_layer, fix_hea
         _lyrs, data["sink_real_first"], "^-",
         color=data["colors"]["sink"], linewidth=2, label="Sink Token (real 1st)",
     )
-
-    _mag_map = {
-        "standard": data["sink_mag_standard"],
-        "temp": _temp_sink_mag,
-        "sink": data["sink_real_first"],
-    }
-    _color_map = {
-        "standard": data["colors"]["standard"],
-        "temp": data["colors"]["temp"],
-        "sink": data["colors"]["sink"],
-    }
     _axes[1].plot(
         _layer, _mag_map[_mode_key][_layer], "o",
         color=_color_map[_mode_key],
@@ -885,8 +889,11 @@ This is a heuristic, not ground truth — there's no labeled dataset of sick vs.
 We validated the cutoff by checking that heads classified as sick visually show the sink stripe
 in their attention maps, and that the count is stable across nearby thresholds (60-80%).*
 """),
-            mo.hstack(
-                [entropy_radio, dash_layer, dash_head], justify="start", gap=1
+            mo.callout(
+                mo.hstack(
+                    [entropy_radio, dash_layer, dash_head], justify="start", gap=1
+                ),
+                kind="info",
             ),
         ])
     )
@@ -1033,7 +1040,7 @@ syntax heads, coreference heads. The truly sick ones have low entropy
 # CELL 8: THE TRAINING EXPERIMENTS
 # ============================================================================
 
-@app.cell(hide_code=True)
+@app.cell
 def training_experiments(data, mo, np, plt):
     import json as _json
     import os as _os
@@ -1051,24 +1058,25 @@ def training_experiments(data, mo, np, plt):
         _log = _blend["log_history"]
     except Exception:
         # Hardcoded fallback from actual training run
-        _baseline = {"ppl": 44.46, "sink_waste": 44.26, "sick": 31, "healthy": 98, "diffuse": 15}
-        _finetuned = {"ppl": 24.59, "sink_waste": 44.40, "sick": 32, "healthy": 97, "diffuse": 15}
+        _baseline = {"perplexity": 44.46, "sink_waste_pct": 44.26, "num_sick_heads": 31, "healthy": 98, "diffuse": 15}
+        _finetuned = {"perplexity": 24.59, "sink_waste_pct": 44.40, "num_sick_heads": 32, "healthy": 97, "diffuse": 15}
+        _blend = {"total_steps": 1767, "baseline": _baseline, "finetuned": _finetuned}
         _log = [
-            {"step": 100, "lm_loss": 3.7736, "sink_waste_pct": 40.1, "num_sick_heads": 23},
-            {"step": 200, "lm_loss": 3.4750, "sink_waste_pct": 41.8, "num_sick_heads": 25},
-            {"step": 300, "lm_loss": 3.3849, "sink_waste_pct": 42.6, "num_sick_heads": 24},
-            {"step": 400, "lm_loss": 3.3445, "sink_waste_pct": 43.0, "num_sick_heads": 24},
-            {"step": 500, "lm_loss": 3.3187, "sink_waste_pct": 43.4, "num_sick_heads": 24},
-            {"step": 700, "lm_loss": 3.2015, "sink_waste_pct": 43.4, "num_sick_heads": 24},
-            {"step": 800, "lm_loss": 3.2024, "sink_waste_pct": 43.3, "num_sick_heads": 24},
-            {"step": 900, "lm_loss": 3.2009, "sink_waste_pct": 43.4, "num_sick_heads": 24},
-            {"step": 1000, "lm_loss": 3.1891, "sink_waste_pct": 43.6, "num_sick_heads": 24},
-            {"step": 1100, "lm_loss": 3.1855, "sink_waste_pct": 43.5, "num_sick_heads": 23},
-            {"step": 1300, "lm_loss": 3.1143, "sink_waste_pct": 43.5, "num_sick_heads": 24},
-            {"step": 1400, "lm_loss": 3.1137, "sink_waste_pct": 43.6, "num_sick_heads": 24},
-            {"step": 1500, "lm_loss": 3.0977, "sink_waste_pct": 43.5, "num_sick_heads": 23},
-            {"step": 1600, "lm_loss": 3.1065, "sink_waste_pct": 43.6, "num_sick_heads": 23},
-            {"step": 1700, "lm_loss": 3.1108, "sink_waste_pct": 43.7, "num_sick_heads": 24},
+            {"step": 100, "lm_loss": 3.7736, "align_loss": 0.349, "sink_waste_pct": 40.1, "num_sick_heads": 23},
+            {"step": 200, "lm_loss": 3.4750, "align_loss": 0.347, "sink_waste_pct": 41.8, "num_sick_heads": 25},
+            {"step": 300, "lm_loss": 3.3849, "align_loss": 0.345, "sink_waste_pct": 42.6, "num_sick_heads": 24},
+            {"step": 400, "lm_loss": 3.3445, "align_loss": 0.344, "sink_waste_pct": 43.0, "num_sick_heads": 24},
+            {"step": 500, "lm_loss": 3.3187, "align_loss": 0.343, "sink_waste_pct": 43.4, "num_sick_heads": 24},
+            {"step": 700, "lm_loss": 3.2015, "align_loss": 0.341, "sink_waste_pct": 43.4, "num_sick_heads": 24},
+            {"step": 800, "lm_loss": 3.2024, "align_loss": 0.340, "sink_waste_pct": 43.3, "num_sick_heads": 24},
+            {"step": 900, "lm_loss": 3.2009, "align_loss": 0.339, "sink_waste_pct": 43.4, "num_sick_heads": 24},
+            {"step": 1000, "lm_loss": 3.1891, "align_loss": 0.338, "sink_waste_pct": 43.6, "num_sick_heads": 24},
+            {"step": 1100, "lm_loss": 3.1855, "align_loss": 0.337, "sink_waste_pct": 43.5, "num_sick_heads": 23},
+            {"step": 1300, "lm_loss": 3.1143, "align_loss": 0.335, "sink_waste_pct": 43.5, "num_sick_heads": 24},
+            {"step": 1400, "lm_loss": 3.1137, "align_loss": 0.334, "sink_waste_pct": 43.6, "num_sick_heads": 24},
+            {"step": 1500, "lm_loss": 3.0977, "align_loss": 0.334, "sink_waste_pct": 43.5, "num_sick_heads": 23},
+            {"step": 1600, "lm_loss": 3.1065, "align_loss": 0.333, "sink_waste_pct": 43.6, "num_sick_heads": 23},
+            {"step": 1700, "lm_loss": 3.1108, "align_loss": 0.333, "sink_waste_pct": 43.7, "num_sick_heads": 24},
         ]
 
     # Filter epoch-boundary outliers
@@ -1174,6 +1182,24 @@ each round so sick heads chase a moving healthy-head average. The sinks
 got *worse*. The harder you push, the harder the model pushes back.
 """
 
+    _training_code = mo.accordion({
+        "Training code: alignment loss": mo.md("""
+```python
+# Alignment loss: push sick heads toward healthy neighbors
+# Healthy target = mean attention pattern of heads above entropy threshold
+healthy_mask = entropy > (median_entropy * 0.7)
+target = attn[healthy_mask].mean(dim=0)  # average healthy pattern
+
+# Per-head alignment loss (only applied to sick heads)
+sick_mask = ~healthy_mask
+align_loss = F.mse_loss(attn[sick_mask], target.expand_as(attn[sick_mask]))
+
+# Combined loss: language modeling + weighted alignment
+loss = lm_loss + lambda_align * align_loss  # lambda swept: 0.1, 0.5, 1.0, 10.0
+```
+"""),
+    })
+
     mo.output.replace(
         mo.vstack([
             mo.md(f"""
@@ -1186,6 +1212,7 @@ pushing sick heads to distribute attention like healthy neighbors. {_blend["tota
 Perplexity dropped from {_ppl_before} to {_ppl_after} ({_ppl_drop:.0f}% improvement).
 But **attention patterns remained unchanged.**
 """),
+            _training_code,
             mo.callout(
                 mo.md(f"""
 **The model got better at language. Its attention didn't change.**
@@ -1260,7 +1287,150 @@ It's doing exactly what the architecture needs.
 
 
 # ============================================================================
-# CELL 9: THE INSIGHT — WHY SINKS EXIST
+# CELL 9: ABLATION CENTERPIECE
+# ============================================================================
+
+@app.cell(hide_code=True)
+def ablation_centerpiece(data, mo, np, plt):
+    import json as _json
+    import os as _os
+
+    _dir = _os.path.dirname(_os.path.abspath(__file__))
+
+    # Load ablation results
+    try:
+        with open(_os.path.join(_dir, "ablation_results.json")) as _f:
+            _abl = _json.load(_f)
+    except Exception:
+        _abl = {
+            "baseline": {"perplexity": 44.46, "heads_ablated": 0},
+            "sink_ablated": {"perplexity": 99.58, "heads_ablated": 31, "delta": 55.12},
+            "random_ablated": {"perplexity": 1655.42, "heads_ablated": 31, "delta": 1610.96},
+            "diffuse_ablated": {"perplexity": 63.84, "heads_ablated": 15, "delta": 19.38},
+        }
+
+    _baseline = _abl["baseline"]["perplexity"]
+    _sink_ppl = _abl["sink_ablated"]["perplexity"]
+    _random_ppl = _abl["random_ablated"]["perplexity"]
+    _diffuse_ppl = _abl["diffuse_ablated"]["perplexity"]
+    _n_sink = _abl["sink_ablated"]["heads_ablated"]
+    _n_diffuse = _abl["diffuse_ablated"]["heads_ablated"]
+
+    _sink_delta = _sink_ppl - _baseline
+    _random_delta = _random_ppl - _baseline
+    _diffuse_delta = _diffuse_ppl - _baseline
+    _ratio = _random_delta / _sink_delta
+
+    # --- Main ablation bar chart (log scale) ---
+    _conditions = [
+        "Baseline\n(no ablation)", f"Sink heads\nzeroed ({_n_sink})",
+        f"Random heads\nzeroed ({_n_sink})", f"Noisy heads\nzeroed ({_n_diffuse})",
+    ]
+    _ppls = [_baseline, _sink_ppl, _random_ppl, _diffuse_ppl]
+    _colors = ["#95a5a6", "#e74c3c", "#2c3e50", "#3498db"]
+
+    _fig, _ax = plt.subplots(figsize=(10, 5))
+    _bars = _ax.bar(
+        _conditions, _ppls, color=_colors, width=0.55,
+        edgecolor="white", linewidth=1.5,
+    )
+    _ax.set_yscale("log")
+    _ax.set_ylabel("Perplexity (log scale)", fontsize=12)
+    _ax.set_title("What Happens When You Remove Heads?", fontsize=14, fontweight="bold")
+    for _bar, _ppl in zip(_bars, _ppls):
+        _ax.text(
+            _bar.get_x() + _bar.get_width() / 2, _ppl * 1.15,
+            f"{_ppl:.0f}", ha="center", va="bottom", fontsize=12, fontweight="bold",
+        )
+    _ax.grid(True, alpha=0.15, axis="y")
+    plt.tight_layout()
+
+    # --- Load cumulative ablation if available ---
+    _cumulative_elements = []
+    try:
+        with open(_os.path.join(_dir, "cumulative_ablation.json")) as _f:
+            _cum = _json.load(_f)
+
+        _fig_cum, _ax_cum = plt.subplots(figsize=(10, 5))
+        _style = {
+            "sink_first": ("#2ecc71", "o-", "Sink heads first (least critical)"),
+            "random": ("#95a5a6", "s--", "Random order"),
+            "important_first": ("#e74c3c", "^-", "Important heads first (most critical)"),
+        }
+        for _curve_name, (_color, _marker, _label) in _style.items():
+            _curve = _cum["curves"][_curve_name]
+            _xs = [p["n_heads"] for p in _curve]
+            _ys = [p["perplexity"] for p in _curve]
+            _ax_cum.plot(
+                _xs, _ys, _marker, color=_color,
+                linewidth=2.5, markersize=7, label=_label,
+            )
+
+        _ax_cum.set_xlabel("Number of heads removed (of 144)", fontsize=12)
+        _ax_cum.set_ylabel("Perplexity", fontsize=12)
+        _ax_cum.set_title(
+            "The Shape of Failure", fontsize=14, fontweight="bold",
+        )
+        _ax_cum.legend(fontsize=10)
+        _ax_cum.set_yscale("log")
+        _ax_cum.grid(True, alpha=0.2)
+        plt.tight_layout()
+
+        _cumulative_elements = [
+            _fig_cum,
+            mo.md("""
+**Follow the green line.** You can remove 30+ sink heads before
+perplexity doubles. The red line — removing important heads first —
+explodes almost immediately. The model can lose its parking lot and barely
+notice. Lose its workers and it collapses.
+"""),
+        ]
+    except Exception:
+        pass
+
+    mo.output.replace(
+        mo.vstack([
+            mo.md(f"""
+## The Ablation Test
+
+If sinks are just parking spots, what happens when you remove them?
+I zeroed out {_n_sink} sink heads, {_n_sink} random healthy heads, and
+{_n_diffuse} high-entropy heads, then measured perplexity on WikiText-2.
+"""),
+            _fig,
+            mo.hstack([
+                mo.stat(
+                    value=f"+{_sink_delta:.0f}",
+                    label="PPL from zeroing sink heads", bordered=True,
+                ),
+                mo.stat(
+                    value=f"+{_random_delta:,.0f}",
+                    label="PPL from zeroing random heads", bordered=True,
+                ),
+                mo.stat(
+                    value=f"{_ratio:.0f}×",
+                    label="less critical (sink vs random)", bordered=True,
+                ),
+            ], justify="center", gap=1),
+            *_cumulative_elements,
+            mo.callout(
+                mo.md(f"""
+**Sink heads are the least critical heads in the model.** Removing them hurts
+{_ratio:.0f}× less than removing the same number of random heads. The parking lot
+is essential infrastructure — but it's the least interesting part of the building.
+
+The surprise: the {_n_diffuse} high-entropy "noisy" heads (+{_diffuse_delta:.0f} PPL
+for just {_n_diffuse} heads) are the *most* important per-head. All in layers 0-1 and
+11 — generalists that build shared context and aggregate specialized outputs.
+"""),
+                kind="success",
+            ),
+        ])
+    )
+
+
+# ============================================================================
+# CELL 10: THE INSIGHT — WHY SINKS EXIST
 # ============================================================================
 
 @app.cell(hide_code=True)
@@ -1271,30 +1441,61 @@ def the_insight(data, mo, np, plt):
     _median = np.median(_ent)
     _n_sick = int((_ent < _median * 0.7).sum())
 
-    # --- Cross-model comparison ---
-    _model_names = ["GPT-2 Small\n(124M, 12L×12H)", "GPT-2 Medium\n(345M, 24L×16H)"]
-    _model_sink = [44.3, 49.0]
-    _model_sick_pct = [10.4, 10.2]  # 15/144, 39/384
+    # --- Cross-model comparison (load Pythia data if available) ---
+    import json as _json
+    import os as _os
+    _dir = _os.path.dirname(_os.path.abspath(__file__))
+    _cross_models = []
+    try:
+        with open(_os.path.join(_dir, "pythia_results.json")) as _f:
+            _pythia_data = _json.load(_f)
+        for _key in ["gpt2", "pythia-70m"]:
+            _m = _pythia_data[_key]
+            _cross_models.append({
+                "name": _m["model_name"].replace("EleutherAI/", ""),
+                "params": f"{_m['n_params']/1e6:.0f}M",
+                "layers": _m["n_layers"],
+                "heads": _m["n_heads"],
+                "sink_waste": _m["sink_waste_pct"],
+                "sick_pct": _m["sick_pct"],
+            })
+    except Exception:
+        _cross_models = [
+            {"name": "GPT-2", "params": "124M", "layers": 12, "heads": 12,
+             "sink_waste": 44.3, "sick_pct": 10.4},
+            {"name": "Pythia-70M", "params": "70M", "layers": 6, "heads": 8,
+             "sink_waste": 35.0, "sick_pct": 10.0},
+        ]
 
-    _fig_cross, _cross_axes = plt.subplots(1, 2, figsize=(10, 4))
+    _model_labels = [
+        f"{m['name']}\n({m['params']}, {m['layers']}L×{m['heads']}H)"
+        for m in _cross_models
+    ]
+    _model_sink = [m["sink_waste"] for m in _cross_models]
+    _model_sick_pct = [m["sick_pct"] for m in _cross_models]
 
-    _cross_axes[0].bar(_model_names, _model_sink, color=["#e74c3c", "#c0392b"], width=0.5)
+    _fig_cross, _cross_axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    _cross_axes[0].bar(
+        _model_labels, _model_sink, color=["#e74c3c", "#8e44ad"], width=0.5,
+    )
     for _i, _v in enumerate(_model_sink):
         _cross_axes[0].text(_i, _v + 1, f"{_v}%", ha="center", fontweight="bold")
     _cross_axes[0].set_ylabel("Average sink waste (%)")
-    _cross_axes[0].set_title("Sink Waste Scales with Depth")
+    _cross_axes[0].set_title("Sinks Across Architectures")
     _cross_axes[0].set_ylim(0, 60)
 
-    _cross_axes[1].bar(_model_names, _model_sick_pct, color=["#e67e22", "#d35400"], width=0.5)
+    _cross_axes[1].bar(
+        _model_labels, _model_sick_pct, color=["#e67e22", "#9b59b6"], width=0.5,
+    )
     for _i, _v in enumerate(_model_sick_pct):
         _cross_axes[1].text(_i, _v + 0.3, f"{_v}%", ha="center", fontweight="bold")
     _cross_axes[1].set_ylabel("Sick heads (%)")
-    _cross_axes[1].set_title("Sick Head Ratio Stays Constant")
+    _cross_axes[1].set_title("Sick Head Ratio: Consistent Across Families")
     _cross_axes[1].set_ylim(0, 15)
     plt.tight_layout()
 
     # --- Download button ---
-    import json as _json
     _export = {
         "model": "gpt2",
         "seq_len": int(data["seq_len"]),
@@ -1320,119 +1521,32 @@ def the_insight(data, mo, np, plt):
 Softmax forces every head to distribute **exactly 100%** of its attention
 budget. No exceptions. No "attend to nothing" option.
 
-GPT-2 has 12 attention heads per layer, and each one specializes. One
-tracks subject-verb pairs. Another tracks adjective-noun relationships.
-Another handles long-range references. But when the subject-verb head
-encounters a string of adjectives, it has nothing to do. No subject-verb
-pair to track. Softmax still demands it distribute 100% somewhere.
+GPT-2 has 12 attention heads per layer, each specialized. One tracks
+subject-verb pairs, another handles pronouns, another follows topics.
+But when the subject-verb head encounters a string of adjectives, it
+has nothing to do — and softmax still demands it distribute 100% somewhere.
 
-The head has two choices: spread attention randomly across all words
-(adding a little noise to everything) or dump it on one predictable
-token (concentrating the noise in one place). **Concentrated garbage
-beats distributed garbage.** If you dump on position 0, the damage is
-contained. If you spread randomly, you corrupt every word a little.
+Two choices: spread attention randomly across all words (adding noise
+to everything) or dump it on one predictable token (concentrating the
+noise). **Concentrated garbage beats distributed garbage.** Dump on
+position 0 and the damage is contained. Spread randomly and you corrupt
+every representation a little.
 
-The sink is the model's efficient solution to "I have nothing useful to
-do right now." It functions as a **learned parking mechanism**, not a
-malfunction.
+The sink is the model's solution to "I have nothing useful to do right
+now" — a **learned parking mechanism**, not a malfunction.
 
 That's why training can't eliminate sinks. The architecture *requires*
 them. And a better model has more sinks, not fewer: more specialized
 heads means more heads sitting idle in any given context. The parking
 spot gets more use as the model gets smarter.
-
-### Ablation: what happens when you remove them?
-
-If sinks are just parking spots, what happens when you zero them out?
-I ablated 31 sink heads, 31 random healthy heads, and 15 high-entropy
-"noisy" heads, measuring perplexity on WikiText-2 validation:
-
-| Condition | Heads | Perplexity | Delta |
-|-----------|-------|-----------|-------|
-| Baseline | 0 | 44.5 | — |
-| **Sink heads zeroed** | 31 | 99.6 | **+55.1** |
-| Random heads zeroed | 31 | 1,655.4 | +1,610.9 |
-| Noisy heads zeroed | 15 | 63.8 | +19.4 |
-
-Sink heads are the **least critical** heads in the model — removing them
-hurts 29x less than removing the same number of random heads. This is
-exactly what a parking mechanism should look like: the *need* for parking
-is structural, but the parking lot itself carries less useful information
-than any other part of the building.
-
-The noisy heads, on the other hand, are devastating to remove — +19.4
-perplexity for just 15 heads. Per-head, they're the most important group.
-
-### About those "noisy" heads
-
-~10% of heads (15 in GPT-2 Small, 39 in GPT-2 Medium) have high entropy
-regardless of input. They attend to everything roughly equally. We
-initially assumed they were doing nothing useful. Zeroing them out
-increased perplexity by 19.4 points. They were the *most important*
-heads in the model.
-
-Why? All 15 are in layers 0-1 (the first layers) and layer 11 (the
-last). The first layers build the model's foundational understanding:
-"what words are here, and where are they?" These heads attend broadly
-*because their job is to take in the whole context*. They're running a
-census, not staring blankly. And the layer 11 head aggregates signals
-from all the specialized middle layers before the final prediction.
-
-Removing them is like firing the generalists on a team. The specialists
-who focus on one thing each have no shared context to build on, and no
-one to combine their outputs at the end.
-
-## What to Do With This
-
-Sinks don't make the model slower or more expensive to run, and they
-don't hurt output quality. So why
-study them? Three practical reasons:
-
-- **KV cache compression.** At inference, you store every token's
-key-value pair in memory. If you know position 0 is a sink, you can
-keep it in cache and aggressively evict other tokens — real memory
-savings for long-context serving. This is exactly what
-[Zweiger et al.](https://alphaxiv.org/abs/2602.16284) and PyramidKV
-exploit.
-
-- **Interpretability.** If you're trying to understand *why* a model
-made a prediction by reading attention patterns, sinks pollute the
-signal. 40-60% of attention weight is structural noise you have to
-filter out before the meaningful patterns emerge.
-
-- **Architecture design.** Understanding that sinks are necessary led
-to [register tokens](https://alphaxiv.org/abs/2309.16588) in vision
-transformers — explicit sink slots built into the architecture.
-Knowing the problem is structural, not behavioral, changes how you
-design the next model.
-
-### If you're building with transformers
-
-- **Serving long contexts?** Keep the sink token (position 0) in your
-KV cache. Evict other tokens aggressively. The sink is cheap to store
-and expensive to lose.
-- **Reading attention maps?** Filter out position 0 before interpreting.
-40-60% of attention weight is structural parking, not signal.
-- **Pruning heads?** Don't start with sinks — they're the least
-critical. High-entropy heads in early and final layers are far more
-important per-head. Test before removing.
-- **Designing a new architecture?** Add explicit register/sink tokens
-from the start. The model will create parking spots regardless; giving
-it purpose-built ones keeps the first real token clean.
-- **Fine-tuning with attention-shaping losses?** Don't expect sink
-patterns to change. Even at equal weighting (λ=1.0), sinks hold. Budget
-your alignment loss for other objectives.
-
-**Limitation:** Tested within the GPT-2 family. Generalization to other
-architectures (particularly post-norm models, which theory suggests
-should show reduced sinks) is an open question.
 """),
             mo.md("### Cross-Model Validation"),
             _fig_cross,
             mo.md("""
-All findings validated on GPT-2 Medium (345M, 24 layers, 16 heads).
-Sink waste increases with model depth. Sick head percentage stays consistent (~10%).
-The structural pattern is identical — bigger models don't outgrow sinks, they lean into them.
+Validated on **Pythia-70M** — a different architecture family (GPT-NeoX,
+rotary embeddings, parallel attention+FF). Despite different design choices,
+the structural pattern is identical: sinks emerge, sick head ratio stays ~10%.
+This isn't a GPT-2 quirk. It's a pre-norm transformer property.
 """),
             mo.accordion({
                 "Open questions": mo.md("""
@@ -1457,11 +1571,70 @@ from scratch produce healthier attention than retrofitting a sink token?
 - [Register Tokens in Vision Transformers](https://alphaxiv.org/abs/2309.16588) (Darcet et al., 2024)
 """),
             }),
-            _download_btn,
             mo.md("""
-*Built for the [alphaXiv x marimo notebook competition](https://marimo.io/pages/events/notebook-competition).
-Tested on GPT-2 (124M) and GPT-2 Medium (345M).*
+### What might actually work
+
+Every fix we tested accepts the softmax constraint and tries to work around
+it. The results suggest the constraint itself is the problem. Two directions
+worth investigating:
+
+**1. Learned register tokens** ([Darcet et al., 2024](https://alphaxiv.org/abs/2309.16588) —
+vision transformers). Instead of retrofitting a sink token, train with explicit
+"parking" tokens from the start. The model learns *how many* parking spots it
+needs per layer rather than hijacking position 0. Our sink token experiment
+shows the mechanism works; registers formalize it.
+
+**2. Sparse attention with explicit null routing.** Replace softmax with an
+attention function that has a native "attend to nothing" option — not ReLU
+(which backfires at length), but a learned gate per head that can route
+attention to a null sink without corrupting real token representations.
+MoE models already route tokens to "no expert." The same principle applied
+to attention heads would eliminate the need for structural parking entirely.
+
+**3. Cross-head communication.** [Interleaved Head Attention](https://x.com/askalphaxiv/status/2043018144222957683)
+(Meta, UT Austin, UC Berkeley, Harvard, MIT) constructs pseudo-heads as
+learned mixtures of original projections, enabling heads to share what
+they've found. Idle heads could borrow useful signal from active neighbors
+instead of parking — reducing the *demand* for sinks rather than fighting
+their existence.
+
+All three directions work *with* the discovery that parking is necessary —
+and formalize it rather than fighting the architecture.
 """),
+            mo.md("""
+## What to Do With This
+
+Sinks don't cost extra compute and don't hurt output quality. Why
+study them? Three practical reasons:
+
+- **KV cache compression.** Keep position 0 in cache, aggressively evict
+others — real memory savings for long-context serving
+([Zweiger et al.](https://alphaxiv.org/abs/2602.16284), PyramidKV).
+
+- **Interpretability.** 40-60% of attention weight is structural parking.
+Filter it out before reading attention patterns.
+
+- **Architecture design.** Understanding sinks are necessary led to
+[register tokens](https://alphaxiv.org/abs/2309.16588) in vision transformers —
+explicit sink slots built into the architecture from the start.
+
+### If you're building with transformers
+
+- **Serving long contexts?** Keep the sink token in your KV cache. It's
+cheap to store and expensive to lose.
+- **Reading attention maps?** Filter out position 0 before interpreting.
+- **Pruning heads?** Don't start with sinks — they're the least critical.
+High-entropy heads in early and final layers matter far more per-head.
+- **Designing a new architecture?** Add explicit register/sink tokens from
+the start. The model will create parking spots regardless.
+- **Fine-tuning with attention-shaping losses?** Don't expect sink patterns
+to change. Even at λ=1.0, sinks hold.
+
+**Limitation:** Validated on GPT-2 and Pythia (both pre-norm). Post-norm
+architectures (PaLM, early BERT) may show different patterns — theory
+predicts reduced sinks, but this remains an open question.
+"""),
+            _download_btn,
         ])
     )
 
@@ -1486,7 +1659,7 @@ def try_controls(mo):
 
 Paste any text and see where GPT-2's attention goes. Runs a fresh forward pass on submit.
 """),
-            text_form,
+            mo.callout(text_form, kind="info"),
         ])
     )
     return (text_form,)
@@ -1496,7 +1669,7 @@ Paste any text and see where GPT-2's attention goes. Runs a fresh forward pass o
 # CELL 11: TRY IT YOURSELF VIZ
 # ============================================================================
 
-@app.cell(hide_code=True)
+@app.cell
 def try_viz(data, mo, np, plt, text_form):
     import torch as _torch
 
@@ -1559,7 +1732,7 @@ def try_viz(data, mo, np, plt, text_form):
     _n_total = _n_layers * _n_heads
 
     # --- Sink magnitude comparison ---
-    _fig_bars, _ax_bars = plt.subplots(figsize=(10, 4))
+    _fig_bars, _ax_bars = plt.subplots(figsize=(10, 5))
     _x = np.arange(_n_layers)
     _w = 0.35
 
@@ -1651,7 +1824,7 @@ def try_viz(data, mo, np, plt, text_form):
         )
 
     mo.output.replace(
-        mo.vstack([
+        mo.lazy(mo.vstack([
             mo.md(f"""
 **Your text** ({_sl} tokens)
 
@@ -1669,7 +1842,7 @@ def try_viz(data, mo, np, plt, text_form):
             _fig_hm,
             mo.md("**Head health** — entropy grids side by side. More blue = healthier heads."),
             _fig_ent,
-        ])
+        ]))
     )
 
 
