@@ -499,7 +499,7 @@ def hook_viz(data, mo, np, plt, hook_layer):
         mo.vstack([
             _fig,
             mo.callout(
-                f"Layer {_layer}: **{_sink_pct:.1f}%** to position 0. Status: **{_status}**.",
+                mo.md(f"Layer {_layer}: **{_sink_pct:.1f}%** to position 0. Status: **{_status}**."),
                 kind="neutral" if _status == "healthy" else "warn" if _status == "forming" else "danger",
             ),
             mo.accordion({
