@@ -1654,8 +1654,9 @@ noise). **Concentrated garbage beats distributed garbage.** Dump on
 position 0 and the damage is contained. Spread randomly and you corrupt
 every representation a little.
 
-The sink is the model's solution to "I have nothing useful to do right
-now" — a **learned parking mechanism**, not a malfunction.
+The sink is the model's **OFF switch** — its solution to "I have nothing
+useful to do right now." Not a malfunction, but a learned mechanism for
+managing unused capacity.
 
 That's why training can't eliminate sinks. The architecture *requires*
 them. And a better model has more sinks, not fewer: more specialized
