@@ -1537,10 +1537,15 @@ spot gets more use as the model gets smarter.
             mo.md("""
 **Pythia-70M** (GPT-NeoX, rotary embeddings, parallel attention+FF) tells a
 different story: sink waste drops to ~3%, but nearly half its heads are "sick"
-by the entropy metric. With only 6 layers, Pythia doesn't develop the deep-layer
-sink pattern GPT-2 shows — confirming that sinks scale with depth, not just
-architecture. The *need* for head specialization is universal; the *form* it
-takes depends on how many layers the model has to work with.
+by the entropy metric. Pythia's final two layers have *every head* at zero
+entropy — maximally focused on a single token — but it's not position 0.
+We hypothesize the difference is positional encoding: GPT-2's learned absolute
+embeddings give position 0 a fixed, predictable representation that every head
+can coordinate around as a shared dump target. Pythia's
+[rotary embeddings](https://alphaxiv.org/abs/2104.09864) encode position
+relationally — there's no Schelling point, so idle heads park on different
+tokens instead of converging. The *need* for parking is universal;
+*where* the model parks depends on how it encodes position.
 """),
             mo.accordion({
                 "Open questions": mo.md("""
