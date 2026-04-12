@@ -207,18 +207,10 @@ def precompute():
             _seq_len = int(_cached["seq_len"])
             _n_layers = int(_cached["n_layers"])
             _n_heads = int(_cached["n_heads"])
-            _temp_sweep = {
-                round(t, 1): _cached[f"temp_{t:.1f}"]
-                for t in np.arange(1.0, 5.1, 0.1)
-                if f"temp_{t:.1f}" in _cached
-            }
 
-            # Still need model for try-it-yourself
-            _model = AutoModelForCausalLM.from_pretrained(
-                "gpt2", attn_implementation="eager"
-            )
-            _tokenizer = AutoTokenizer.from_pretrained("gpt2")
-            _model.eval()
+            # Model loaded lazily in try-it-yourself cell
+            _model = None
+            _tokenizer = None
     else:
         # --- Full computation with progress ---
         with mo.status.spinner("Loading GPT-2...") as _status:
@@ -324,18 +316,11 @@ def precompute():
                 [_layer[0].numpy() for _layer in _sink_out.attentions]
             )
 
-            # --- Precompute temperature sweep ---
-            _status.update("Precomputing temperature sweep...")
-            _temp_sweep = {}
-            for _t_val in np.arange(1.0, 5.1, 0.1):
-                _t_key = round(float(_t_val), 1)
-                _scaled = _raw_scores_all / _t_val
-                _exp = np.exp(_scaled - _scaled.max(axis=-1, keepdims=True))
-                _temp_sweep[_t_key] = _exp / _exp.sum(axis=-1, keepdims=True)
+            # Temperature computed on-the-fly in fix_comparison cell (fast numpy softmax)
 
-            # --- Save cache ---
+            # --- Save cache (compact — no temp sweep) ---
             _status.update("Saving cache...")
-            _save_dict = {
+            np.savez_compressed(_cache_path, **{
                 "text_hash": _text_hash,
                 "standard_attn": _standard_attn,
                 "esa_attn": _esa_attn,
@@ -345,10 +330,7 @@ def precompute():
                 "seq_len": _seq_len,
                 "n_layers": _n_layers,
                 "n_heads": _n_heads,
-            }
-            for _t_key, _t_attn in _temp_sweep.items():
-                _save_dict[f"temp_{_t_key:.1f}"] = _t_attn
-            np.savez_compressed(_cache_path, **_save_dict)
+            })
 
     # --- Color constants ---
     _C_STD = "#e74c3c"
@@ -356,12 +338,18 @@ def precompute():
     _C_SINK = "#2ecc71"
     _C_ESA = "#95a5a6"
 
+    def _temp_attn(t_val):
+        """Compute temperature-scaled attention on the fly (~5ms)."""
+        _scaled = _raw_scores_all / t_val
+        _exp = np.exp(_scaled - _scaled.max(axis=-1, keepdims=True))
+        return _exp / _exp.sum(axis=-1, keepdims=True)
+
     data = {
         "standard_attn": _standard_attn,
         "esa_attn": _esa_attn,
         "raw_scores_all": _raw_scores_all,
         "sink_attn_full": _sink_attn_full,
-        "temp_sweep": _temp_sweep,
+        "temp_attn_fn": _temp_attn,
         "entropy_standard": _entropy(_standard_attn),
         "entropy_esa": _entropy(_esa_attn),
         "entropy_sink": _entropy(_sink_attn_full),
@@ -683,13 +671,8 @@ keeping the sink token in the KV cache lets models process unlimited-length text
 
 @app.cell(hide_code=True)
 def fix_comparison(data, mo, np, plt, fix_radio, temp_slider, fix_layer, fix_head):
-    # Temperature-scaled attention (precomputed lookup)
-    _t_key = round(float(temp_slider.value), 1)
-    temp_attn = data["temp_sweep"].get(_t_key)
-    if temp_attn is None:
-        _scaled = data["raw_scores_all"] / temp_slider.value
-        _exp = np.exp(_scaled - _scaled.max(axis=-1, keepdims=True))
-        temp_attn = _exp / _exp.sum(axis=-1, keepdims=True)
+    # Temperature-scaled attention (computed on the fly — ~5ms)
+    temp_attn = data["temp_attn_fn"](temp_slider.value)
 
     _layer = fix_layer.value
     _head_val = fix_head.value
@@ -1677,8 +1660,16 @@ def try_viz(data, mo, np, plt, text_form):
 
     mo.stop(not text_form.value, mo.md("*Type or paste text above and click Submit to analyze.*"))
 
+    from transformers import AutoModelForCausalLM as _AMLM, AutoTokenizer as _AT
+
+    # Lazy-load model (only when user submits text)
     _model = data["model"]
     _tokenizer = data["tokenizer"]
+    if _model is None:
+        with mo.status.spinner("Loading GPT-2 for analysis..."):
+            _model = _AMLM.from_pretrained("gpt2", attn_implementation="eager")
+            _tokenizer = _AT.from_pretrained("gpt2")
+            _model.eval()
     _n_heads = data["n_heads"]
     _n_layers = data["n_layers"]
     _d_model = _model.config.n_embd
