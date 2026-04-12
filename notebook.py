@@ -1191,8 +1191,10 @@ vector (768 parameters, model frozen) to serve as a dedicated sink token.
                 mo.stat(value="768", label="parameters trained (of 124M)", bordered=True),
             ], justify="center", gap=1),
             mo.md("""
-**Perplexity improved by 4.6%** — from 37.7 to 35.9 — by training 0.0006%
-of the model's parameters. The learned embedding gives the model a proper
+**Perplexity improved by 4.6%** — from 37.7 to 35.9 on WikiText-2
+validation — by training 0.0006% of the model's parameters. (The 37.7
+baseline reflects GPT-2's perplexity when evaluated with the same
+prepend protocol but using a zero token instead of a learned one.) The learned embedding gives the model a proper
 parking spot instead of hijacking the first real word. Prepending a zero
 token at inference (no training) had no effect (37.7 → 37.7), confirming
 the improvement comes from the *learned* representation, not the position.
@@ -1201,6 +1203,25 @@ Sinks didn't decrease — they stayed at ~41%. But the model got better at
 language because its first real token is no longer corrupted. The OFF switch
 isn't broken. It just works better when it's purpose-built.
 """),
+            mo.accordion({
+                "Training code: learned sink embedding": mo.md("""
+```python
+# 768 trainable parameters — one embedding vector prepended at position 0
+sink_embed = nn.Parameter(torch.randn(1, 1, 768) * 0.02)
+
+for batch in dataloader:
+    # Prepend learned embedding to input
+    embeds = model.transformer.wte(batch)  # (B, seq, 768)
+    embeds = torch.cat([sink_embed.expand(B, -1, -1), embeds], dim=1)
+
+    # Forward pass with modified embeddings (model frozen)
+    out = model(inputs_embeds=embeds, labels=labels)
+    out.loss.backward()
+    optimizer.step()  # only updates sink_embed
+```
+*500 steps on WikiText-2, AdamW lr=1e-3. Full script: `train_learned_sink.py`*
+"""),
+            }),
         ])
     )
 
@@ -1271,6 +1292,17 @@ def ablation_centerpiece(data, mo, np, plt):
                 fontweight="bold",
             )
     _ax.grid(True, alpha=0.15, axis="y")
+    # Annotate the 29× gap
+    _ax.annotate(
+        f"{_ratio:.0f}× gap", xy=(1, _sink_ppl), xytext=(1.8, _random_ppl * 0.5),
+        fontsize=13, fontweight="bold", color="#2c3e50",
+        arrowprops=dict(arrowstyle="->", color="#2c3e50", lw=2),
+        ha="center",
+    )
+    _ax.annotate(
+        "", xy=(2, _random_ppl * 0.85), xytext=(1.8, _random_ppl * 0.5),
+        arrowprops=dict(arrowstyle="->", color="#2c3e50", lw=2),
+    )
     plt.tight_layout()
 
     # --- Load cumulative ablation if available ---
@@ -1787,219 +1819,6 @@ predicts reduced sinks, but this remains an open question.
     )
 
 
-# ============================================================================
-# CELL 10: TRY IT YOURSELF CONTROLS (show code)
-# ============================================================================
-
-@app.cell
-def try_controls(mo):
-    text_form = mo.ui.form(
-        mo.ui.text_area(
-            label="Paste any text (max 200 tokens)", max_length=1500
-        ),
-        submit_button_label="Analyze",
-    )
-
-    mo.output.replace(
-        mo.vstack([
-            mo.md("""
-## Try It Yourself
-
-Paste any text and see where GPT-2's attention goes. Runs a fresh forward pass on submit.
-"""),
-            mo.callout(text_form, kind="info"),
-        ])
-    )
-    return (text_form,)
-
-
-# ============================================================================
-# CELL 11: TRY IT YOURSELF VIZ
-# ============================================================================
-
-@app.cell
-def try_viz(data, mo, np, plt, text_form):
-    import torch as _torch
-
-    mo.stop(not text_form.value, mo.md("*Type or paste text above and click Submit to analyze.*"))
-
-    from transformers import AutoModelForCausalLM as _AMLM, AutoTokenizer as _AT
-
-    # Lazy-load model (only when user submits text)
-    _model = data["model"]
-    _tokenizer = data["tokenizer"]
-    if _model is None:
-        with mo.status.spinner("Loading GPT-2 for analysis..."):
-            _model = _AMLM.from_pretrained("gpt2", attn_implementation="eager")
-            _tokenizer = _AT.from_pretrained("gpt2")
-            _model.eval()
-    _n_heads = data["n_heads"]
-    _n_layers = data["n_layers"]
-    _d_model = _model.config.n_embd
-    _d_head = _d_model // _n_heads
-
-    _inputs = _tokenizer(
-        text_form.value, return_tensors="pt", truncation=True, max_length=200
-    )
-    _sl = _inputs["input_ids"].shape[1]
-
-    _qkv_cache = {}
-
-    def _capture_qkv(_li):
-        def _hook(module, inp, out):
-            _qkv_cache[_li] = out.detach()
-        return _hook
-
-    _hooks = []
-    for _i, _block in enumerate(_model.transformer.h):
-        _hooks.append(_block.attn.c_attn.register_forward_hook(_capture_qkv(_i)))
-
-    with _torch.no_grad():
-        _out = _model(**_inputs, output_attentions=True)
-
-    for _h in _hooks:
-        _h.remove()
-
-    _attn = np.stack([_layer[0].numpy() for _layer in _out.attentions])
-    _sink = _attn[:, :, :, 0].mean(axis=(1, 2))
-
-    # --- Sink token forward pass ---
-    _sink_ids = _torch.cat(
-        [_torch.zeros(1, 1, dtype=_torch.long), _inputs["input_ids"]], dim=1
-    )
-    with _torch.no_grad():
-        _sink_out = _model(input_ids=_sink_ids, output_attentions=True)
-
-    _sink_attn = np.stack([_layer[0].numpy() for _layer in _sink_out.attentions])
-    # Attention to real first token (now at position 1) from real tokens only
-    _sink_real = _sink_attn[:, :, 1:, 1].mean(axis=(1, 2))
-
-    # --- Entropy for both ---
-    _p = np.clip(_attn, 1e-9, 1.0)
-    _ent = -(_p * np.log(_p)).sum(axis=-1).mean(axis=-1)
-
-    _p_sk = np.clip(_sink_attn, 1e-9, 1.0)
-    _ent_sk = -(_p_sk * np.log(_p_sk)).sum(axis=-1).mean(axis=-1)
-
-    _median_ent = np.median(_ent)
-    _thresh = _median_ent * 0.7
-    _n_sick = int((_ent < _thresh).sum())
-    _n_sick_sk = int((_ent_sk < _thresh).sum())
-    _n_total = _n_layers * _n_heads
-
-    # --- Sink magnitude comparison ---
-    _fig_bars, _ax_bars = plt.subplots(figsize=(10, 5))
-    _x = np.arange(_n_layers)
-    _w = 0.35
-
-    _ax_bars.bar(
-        _x - _w / 2, _sink * 100,
-        width=_w, color=data["colors"]["standard"], label="Standard",
-    )
-    _ax_bars.bar(
-        _x + _w / 2, _sink_real * 100,
-        width=_w, color=data["colors"]["sink"], label="Sink Token",
-    )
-    _ax_bars.set_xlabel("Layer")
-    _ax_bars.set_ylabel("Attention to first real token (%)")
-    _ax_bars.set_title("Sink Magnitude — Standard vs Sink Token")
-    _ax_bars.legend()
-    _ax_bars.set_ylim(bottom=0)
-    plt.tight_layout()
-
-    # --- Attention heatmaps: standard vs sink token (deepest layer, averaged) ---
-    _deep = _n_layers - 1
-    _std_avg = _attn[_deep].mean(axis=0)
-    _sk_avg_map = _sink_attn[_deep].mean(axis=0)
-
-    _vmax_attn = max(_std_avg.max(), _sk_avg_map.max())
-    _fig_hm, _hm_axes = plt.subplots(1, 2, figsize=(12, 5))
-
-    _hm_axes[0].imshow(_std_avg, cmap="viridis", aspect="auto", vmin=0, vmax=_vmax_attn)
-    _hm_axes[0].set_title(f"Standard — Layer {_deep}, All Heads")
-    _hm_axes[0].set_xlabel("Key position")
-    _hm_axes[0].set_ylabel("Query position")
-    plt.colorbar(_hm_axes[0].images[0], ax=_hm_axes[0], shrink=0.8, label="Attention weight")
-
-    _hm_axes[1].imshow(_sk_avg_map, cmap="viridis", aspect="auto", vmin=0, vmax=_vmax_attn)
-    _hm_axes[1].set_title(f"Sink Token — Layer {_deep}, All Heads")
-    _hm_axes[1].set_xlabel("Key position")
-    _hm_axes[1].set_ylabel("Query position")
-    plt.colorbar(_hm_axes[1].images[0], ax=_hm_axes[1], shrink=0.8, label="Attention weight")
-    plt.tight_layout()
-
-    # --- Entropy grids side by side ---
-    _fig_ent, _ent_axes = plt.subplots(1, 2, figsize=(12, 5))
-    _ent_vmin = min(_ent.min(), _ent_sk.min())
-    _ent_vmax = max(_ent.max(), _ent_sk.max())
-
-    _ent_axes[0].imshow(_ent, cmap="RdBu", aspect="auto", vmin=_ent_vmin, vmax=_ent_vmax)
-    _ent_axes[0].set_title("Entropy — Standard")
-    _ent_axes[0].set_xlabel("Head")
-    _ent_axes[0].set_ylabel("Layer")
-    _ent_axes[0].set_xticks(range(_n_heads))
-    _ent_axes[0].set_yticks(range(_n_layers))
-
-    _ent_axes[1].imshow(_ent_sk, cmap="RdBu", aspect="auto", vmin=_ent_vmin, vmax=_ent_vmax)
-    _ent_axes[1].set_title("Entropy — Sink Token")
-    _ent_axes[1].set_xlabel("Head")
-    _ent_axes[1].set_ylabel("Layer")
-    _ent_axes[1].set_xticks(range(_n_heads))
-    _ent_axes[1].set_yticks(range(_n_layers))
-    plt.colorbar(_ent_axes[1].images[0], ax=_ent_axes[1], shrink=0.8, label="Entropy (red=sick, blue=healthy)")
-    plt.tight_layout()
-
-    _peak = _sink.max() * 100
-    _peak_layer = int(_sink.argmax())
-    _std_avg_pct = _sink.mean() * 100
-    _sk_avg_pct = _sink_real.mean() * 100
-
-    # Find which token gets the most total attention
-    _total_attn_per_pos = _attn.mean(axis=(0, 1, 2))
-    _most_attended_pos = int(_total_attn_per_pos.argmax())
-    _tokens_list = [_tokenizer.decode(t) for t in _inputs["input_ids"][0]]
-    _most_attended_word = repr(_tokens_list[_most_attended_pos].strip())
-
-    _sink_pct = _n_sick / _n_total * 100
-    _sink_pct_sk = _n_sick_sk / _n_total * 100
-    _healed = max(0, _n_sick - _n_sick_sk)
-
-    if _most_attended_pos == 0:
-        _word_explanation = (
-            f"The most-attended token is {_most_attended_word} (position 0) — "
-            f"the classic first-token sink. The model isn't choosing this word "
-            f"because it's meaningful; it's a parking spot for attention that "
-            f"has nowhere useful to go."
-        )
-    else:
-        _word_explanation = (
-            f"The most-attended token is {_most_attended_word} "
-            f"(position {_most_attended_pos}) — unusually, not the first token. "
-            f"This can happen with short inputs or text that starts with a "
-            f"high-information word."
-        )
-
-    mo.output.replace(
-        mo.lazy(mo.vstack([
-            mo.md(f"""
-**Your text** ({_sl} tokens)
-
-| | Standard | Sink Token | Change |
-|---|---|---|---|
-| **Peak sink** | {_peak:.1f}% (layer {_peak_layer}) | {_sink_real.max() * 100:.1f}% (layer {int(_sink_real.argmax())}) | {(_sink_real.max() - _sink.max()) * 100:+.1f}% |
-| **Average sink** | {_std_avg_pct:.1f}% | {_sk_avg_pct:.1f}% | {_sk_avg_pct - _std_avg_pct:+.1f}% |
-| **Sick heads** | {_n_sick} of {_n_total} ({_sink_pct:.0f}%) | {_n_sick_sk} of {_n_total} ({_sink_pct_sk:.0f}%) | {_healed} healed |
-
-{_word_explanation}
-"""),
-            _fig_bars,
-            mo.md("**Attention distribution** — deepest layer, all heads averaged. "
-                   "Left: standard (bright stripe = sink). Right: with sink token (attention redistributed)."),
-            _fig_hm,
-            mo.md("**Head health** — entropy grids side by side. More blue = healthier heads."),
-            _fig_ent,
-        ]))
-    )
 
 
 if __name__ == "__main__":
