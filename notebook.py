@@ -6,6 +6,7 @@
 #     "transformers",
 #     "numpy",
 #     "matplotlib",
+#     "plotly",
 # ]
 # ///
 
@@ -1324,49 +1325,43 @@ def ablation_centerpiece(data, mo, np, plt):
     _diffuse_delta = _diffuse_ppl - _baseline
     _ratio = _random_delta / _sink_delta
 
-    # --- Main ablation bar chart (log scale) ---
+    # --- Main ablation bar chart (plotly, interactive) ---
+    import plotly.graph_objects as _go
+
     _conditions = [
-        "Baseline\n(no ablation)", f"Sink heads\nzeroed ({_n_sink})",
-        f"Random heads\nzeroed ({_n_sink})", f"Noisy heads\nzeroed ({_n_diffuse})",
+        f"Baseline<br>(no ablation)", f"Sink heads<br>zeroed ({_n_sink})",
+        f"Random heads<br>zeroed ({_n_sink})", f"Noisy heads<br>zeroed ({_n_diffuse})",
     ]
     _ppls = [_baseline, _sink_ppl, _random_ppl, _diffuse_ppl]
     _colors = ["#95a5a6", "#e74c3c", "#2c3e50", "#3498db"]
+    _hover = [
+        f"Baseline: {_baseline:.1f} PPL",
+        f"Sink heads: {_sink_ppl:.1f} PPL (+{_sink_delta:.0f})<br>{_n_sink} heads removed",
+        f"Random heads: {_random_ppl:,.0f} PPL (+{_random_delta:,.0f})<br>{_n_sink} heads removed",
+        f"Noisy heads: {_diffuse_ppl:.1f} PPL (+{_diffuse_delta:.0f})<br>{_n_diffuse} heads removed",
+    ]
 
-    _fig, _ax = plt.subplots(figsize=(10, 5))
-    _bars = _ax.bar(
-        _conditions, _ppls, color=_colors, width=0.55,
-        edgecolor="white", linewidth=1.5,
+    _fig_abl = _go.Figure(data=[_go.Bar(
+        x=_conditions, y=_ppls,
+        marker_color=_colors,
+        text=[f"{p:,.0f}" for p in _ppls],
+        textposition=["outside", "outside", "inside", "outside"],
+        textfont=dict(size=14, color=["#2c3e50", "#2c3e50", "white", "#2c3e50"]),
+        hovertext=_hover,
+        hoverinfo="text",
+    )])
+    _fig_abl.update_layout(
+        title=dict(text="What Happens When You Remove Heads?", font=dict(size=16)),
+        yaxis=dict(type="log", title="Perplexity (log scale)", gridcolor="#eee"),
+        plot_bgcolor="#fafafa", paper_bgcolor="#fafafa",
+        height=420, margin=dict(t=60, b=80),
+        annotations=[dict(
+            x=1.5, y=np.log10(_random_ppl * 0.4),
+            text=f"<b>{_ratio:.0f}× gap</b>",
+            showarrow=False, font=dict(size=16, color="#2c3e50"),
+            yref="y",
+        )],
     )
-    _ax.set_yscale("log")
-    _ax.set_ylabel("Perplexity (log scale)", fontsize=12)
-    _ax.set_title("What Happens When You Remove Heads?", fontsize=14, fontweight="bold", pad=15)
-    for _bar, _ppl in zip(_bars, _ppls):
-        # Place label inside bar if it would overlap the title
-        if _ppl > 500:
-            _ax.text(
-                _bar.get_x() + _bar.get_width() / 2, _ppl * 0.7,
-                f"{_ppl:,.0f}", ha="center", va="top", fontsize=12,
-                fontweight="bold", color="white",
-            )
-        else:
-            _ax.text(
-                _bar.get_x() + _bar.get_width() / 2, _ppl * 1.15,
-                f"{_ppl:.0f}", ha="center", va="bottom", fontsize=12,
-                fontweight="bold",
-            )
-    _ax.grid(True, alpha=0.15, axis="y")
-    # Annotate the 29× gap
-    _ax.annotate(
-        f"{_ratio:.0f}× gap", xy=(1, _sink_ppl), xytext=(1.8, _random_ppl * 0.5),
-        fontsize=13, fontweight="bold", color="#2c3e50",
-        arrowprops=dict(arrowstyle="->", color="#2c3e50", lw=2),
-        ha="center",
-    )
-    _ax.annotate(
-        "", xy=(2, _random_ppl * 0.85), xytext=(1.8, _random_ppl * 0.5),
-        arrowprops=dict(arrowstyle="->", color="#2c3e50", lw=2),
-    )
-    plt.tight_layout()
 
     # --- Load cumulative ablation if available ---
     _cumulative_elements = []
@@ -1382,12 +1377,25 @@ def ablation_centerpiece(data, mo, np, plt):
         }
         for _curve_name, (_color, _marker, _label) in _style.items():
             _curve = _cum["curves"][_curve_name]
-            _xs = [p["n_heads"] for p in _curve]
-            _ys = [p["perplexity"] for p in _curve]
+            _xs = np.array([p["n_heads"] for p in _curve])
+            _ys = np.array([p["perplexity"] for p in _curve])
+            # Raw data points (faded)
             _ax_cum.plot(
-                _xs, _ys, _marker, color=_color,
-                linewidth=2.5, markersize=7, label=_label,
+                _xs, _ys, _marker, color=_color, alpha=0.35,
+                linewidth=1, markersize=5,
             )
+            # Smoothed trend line (3-point rolling mean)
+            _ys_smooth = np.convolve(_ys, np.ones(3)/3, mode="same")
+            _ys_smooth[0] = _ys[0]
+            _ys_smooth[-1] = _ys[-1]
+            _ax_cum.plot(
+                _xs, _ys_smooth, "-", color=_color,
+                linewidth=3, label=_label,
+            )
+
+        # Mark the n=30 comparison point
+        _ax_cum.axvline(x=30, color="#888", linestyle=":", alpha=0.5, linewidth=1)
+        _ax_cum.text(31, _ax_cum.get_ylim()[0] * 1.5, "n=30\n(ablation\ntest)", fontsize=8, color="#888")
 
         _ax_cum.set_xlabel("Number of heads removed (of 144)", fontsize=12)
         _ax_cum.set_ylabel("Perplexity", fontsize=12)
@@ -1421,7 +1429,7 @@ If sinks are just parking spots, what happens when you remove them?
 I zeroed out {_n_sink} sink heads, {_n_sink} random healthy heads, and
 {_n_diffuse} high-entropy heads, then measured perplexity on WikiText-2.
 """),
-            _fig,
+            _fig_abl,
             mo.hstack([
                 mo.stat(
                     value=f"+{_sink_delta:.0f}",
