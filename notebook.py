@@ -1478,7 +1478,7 @@ def adaptive_viz(data, mo, np, plt, adapt_strength):
     _axes[0].set_xticks(range(_n_h))
     _axes[0].set_yticks(range(_n_l))
 
-    _axes[1].imshow(_ent_fixed, cmap="RdBu", aspect="auto", vmin=_vmin, vmax=_vmax)
+    _im = _axes[1].imshow(_ent_fixed, cmap="RdBu", aspect="auto", vmin=_vmin, vmax=_vmax)
     _axes[1].set_title(
         f"After (strength={_strength:.2f})", fontsize=12, fontweight="bold",
     )
@@ -1486,8 +1486,8 @@ def adaptive_viz(data, mo, np, plt, adapt_strength):
     _axes[1].set_ylabel("Layer")
     _axes[1].set_xticks(range(_n_h))
     _axes[1].set_yticks(range(_n_l))
-    plt.colorbar(
-        _axes[1].images[0], ax=_axes, shrink=0.8,
+    _fig.colorbar(
+        _im, ax=_axes, orientation="horizontal", shrink=0.6, pad=0.12,
         label="Entropy (red=sick, blue=healthy)",
     )
     plt.tight_layout()
