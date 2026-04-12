@@ -171,10 +171,10 @@ def precompute():
         "in the sequence, weighted by learned query-key dot products. The "
         "resulting architecture proved remarkably scalable. GPT, BERT, and "
         "their descendants all build on this foundation. But attention has "
-        "quirks. Recent work by LeCun and collaborators at NYU discovered that "
-        "certain token positions absorb a disproportionate share of attention "
-        "weight across many heads and layers. These attention sinks appear to "
-        "emerge from the pre-norm architecture used in most modern transformers."
+        "quirks. Recent work has discovered that certain token positions absorb "
+        "a disproportionate share of attention weight across many heads and "
+        "layers. These attention sinks appear to emerge from the pre-norm "
+        "architecture used in most modern transformers."
     )
 
     # --- Cache setup ---
@@ -526,7 +526,8 @@ The bright vertical stripe on the left edge is an **attention sink** — every
 token staring at position 0. In GPT-2's deepest layers, over **{_peak_waste:.0f}%**
 of attention goes to one meaningless token. Drag the slider to watch it form.
 
-> **Why GPT-2?** Sinks appear in LLaMA, Mistral, and every pre-norm transformer.
+> **Why GPT-2?** Sinks appear in LLaMA, Mistral, and every pre-norm transformer
+> (architectures that normalize *before* each layer, which most modern LLMs use).
 > GPT-2 is small enough to run these diagnostics interactively, with fully open weights.
 """),
             mo.callout(hook_layer, kind="info"),
@@ -615,7 +616,7 @@ One changes the math. The other changes the input.
 """),
             mo.accordion({
                 "What about blocking self-attention? (ESA)": mo.md("""
-[Exclusive Self Attention](https://alphaxiv.org/abs/2603.09078) (Zhai, 2025) blocks
+[Exclusive Self Attention](https://alphaxiv.org/abs/2603.09078) (Zhai, 2026) blocks
 the diagonal — tokens can't attend to themselves. We tested it: **no effect** on
 sink magnitude at any layer. Sinks aren't caused by self-attention. They're
 structural, tied to pre-norm residual streams. An original diagnostic: ESA meets
@@ -810,8 +811,7 @@ production length (175 tokens), sinks *increase* to
 **{_relu_sink_175:.1f}%** — worse than standard.
 
 This failure mode is known
-([Wortsman et al. 2023](https://alphaxiv.org/abs/2309.08586) showed ReLU
-requires sequence-length scaling). I'm quantifying it in terms of sink
+(ReLU attention is known to require sequence-length-dependent scaling). I'm quantifying it in terms of sink
 magnitude: the same model, same weights, same text — ReLU makes the sink
 problem worse at realistic sequence lengths.
 """),
@@ -1651,7 +1651,7 @@ def the_insight(data, mo, np, plt):
             {"name": "GPT-2", "params": "124M", "layers": 12, "heads": 12,
              "sink_waste": 44.3, "sick_pct": 10.4},
             {"name": "Pythia-70M", "params": "70M", "layers": 6, "heads": 8,
-             "sink_waste": 35.0, "sick_pct": 10.0},
+             "sink_waste": 3.3, "sick_pct": 45.8},
         ]
 
     _model_labels = [
@@ -1732,16 +1732,22 @@ spot gets more use as the model gets smarter.
             _fig_cross,
             mo.md("""
 **Pythia-70M** (GPT-NeoX, rotary embeddings, parallel attention+FF) tells a
-different story: sink waste drops to ~3%, but nearly half its heads are "sick"
-by the entropy metric. Pythia's final two layers have *every head* at zero
-entropy — maximally focused on a single token — but it's not position 0.
-We hypothesize the difference is positional encoding: GPT-2's learned absolute
-embeddings give position 0 a fixed, predictable representation that every head
-can coordinate around as a shared dump target. Pythia's
+different story. Sink waste drops to ~3% — dramatically lower than GPT-2's
+44%. But nearly half its heads are "sick" by the entropy metric.
+
+Pythia's final two layers have *every head* at zero entropy — maximally
+focused on a single token — but it's not position 0. The heads still
+park, just not in the same place.
+
+We hypothesize the difference is positional encoding. GPT-2's learned
+absolute embeddings give position 0 a fixed, predictable representation
+that every head can coordinate around. Pythia's
 [rotary embeddings](https://alphaxiv.org/abs/2104.09864) encode position
-relationally — there's no Schelling point, so idle heads park on different
-tokens instead of converging. The *need* for parking is universal;
-*where* the model parks depends on how it encodes position.
+relationally — there's no Schelling point, so idle heads park on
+different tokens instead of converging.
+
+The *need* for parking is universal. *Where* the model parks depends on
+how it encodes position.
 """),
             mo.accordion({
                 "Open questions": mo.md("""
@@ -1760,8 +1766,7 @@ from scratch produce healthier attention than retrofitting a sink token?
 - [Attention Sinks](https://alphaxiv.org/abs/2309.17453) (Xiao et al., 2023)
 - [The Spike, the Sparse and the Sink](https://alphaxiv.org/abs/2603.05498) (Sun et al., LeCun/NYU)
 - [Attention Sinks Are Provably Necessary](https://alphaxiv.org/abs/2603.11487) (Ran-Milo, 2026)
-- [ReLU sequence-length scaling](https://alphaxiv.org/abs/2309.08586) (Wortsman et al., 2023)
-- [Exclusive Self Attention](https://alphaxiv.org/abs/2603.09078) (Zhai, 2025)
+- [Exclusive Self Attention](https://alphaxiv.org/abs/2603.09078) (Zhai, 2026)
 - [Fast KV Compaction via Attention Matching](https://alphaxiv.org/abs/2602.16284) (Zweiger et al.)
 - [Register Tokens in Vision Transformers](https://alphaxiv.org/abs/2309.16588) (Darcet et al., 2024)
 """),
@@ -1786,8 +1791,8 @@ attention to a null sink without corrupting real token representations.
 MoE models already route tokens to "no expert." The same principle applied
 to attention heads would eliminate the need for structural parking entirely.
 
-**3. Cross-head communication.** [Interleaved Head Attention](https://x.com/askalphaxiv/status/2043018144222957683)
-(Meta, UT Austin, UC Berkeley, Harvard, MIT) constructs pseudo-heads as
+**3. Cross-head communication.** Interleaved Head Attention
+(Meta, UT Austin, UC Berkeley, Harvard, MIT, 2026) constructs pseudo-heads as
 learned mixtures of original projections, enabling heads to share what
 they've found. Idle heads could borrow useful signal from active neighbors
 instead of parking — reducing the *demand* for sinks rather than fighting
@@ -1806,7 +1811,7 @@ study them? Three practical reasons:
 others — real memory savings for long-context serving
 ([Zweiger et al.](https://alphaxiv.org/abs/2602.16284), PyramidKV).
 
-- **Interpretability.** 40-60% of attention weight is structural parking.
+- **Interpretability.** Over 44% of attention weight is structural parking.
 Filter it out before reading attention patterns.
 
 - **Architecture design.** Understanding sinks are necessary led to
