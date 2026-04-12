@@ -623,8 +623,8 @@ def fix_controls(mo):
     fix_layer = mo.ui.slider(
         start=0, stop=11, value=8, label="Layer", show_value=True
     )
-    fix_head = mo.ui.radio(
-        options=_head_opts, value="Average (all heads)", label="Head", inline=True
+    fix_head = mo.ui.dropdown(
+        options=_head_opts, value="Average (all heads)", label="Head",
     )
 
     mo.output.replace(
