@@ -542,6 +542,62 @@ of attention goes to one meaningless token. Drag the slider to watch it form.
 
 @app.cell(hide_code=True)
 def hook_viz(data, mo, np, plt, hook_layer):
+    def _build_flow_svg(attn_layer, tokens, n_show=20):
+        """Build an SVG showing attention flow from queries to keys.
+        attn_layer: (n_heads, seq, seq) — averaged across heads.
+        Shows top n_show tokens, with line width proportional to attention.
+        """
+        avg = attn_layer.mean(axis=0)  # (seq, seq)
+        seq_len = min(len(tokens), n_show)
+        avg = avg[:seq_len, :seq_len]
+        toks = [t.strip() or "·" for t in tokens[:seq_len]]
+
+        W, H = 700, max(400, seq_len * 28 + 60)
+        left_x, right_x = 120, 580
+        y_start = 40
+        y_step = (H - 80) / max(seq_len - 1, 1)
+
+        lines = []
+        for qi in range(seq_len):
+            qy = y_start + qi * y_step
+            for ki in range(seq_len):
+                ky = y_start + ki * y_step
+                w = float(avg[qi, ki])
+                if w < 0.02:
+                    continue
+                opacity = min(w * 3, 0.9)
+                stroke_w = max(w * 12, 0.5)
+                color = "#e74c3c" if ki == 0 else "#3498db"
+                lines.append(
+                    f'<line x1="{left_x+10}" y1="{qy}" x2="{right_x-10}" y2="{ky}" '
+                    f'stroke="{color}" stroke-width="{stroke_w:.1f}" opacity="{opacity:.2f}"/>'
+                )
+
+        labels_left = "".join(
+            f'<text x="{left_x-5}" y="{y_start + i * y_step + 4}" '
+            f'text-anchor="end" font-size="11" fill="#2c3e50">{t}</text>'
+            for i, t in enumerate(toks)
+        )
+        labels_right = "".join(
+            f'<text x="{right_x+5}" y="{y_start + i * y_step + 4}" '
+            f'font-size="11" fill="{("#e74c3c" if i == 0 else "#2c3e50")}" '
+            f'font-weight="{("bold" if i == 0 else "normal")}">{t}</text>'
+            for i, t in enumerate(toks)
+        )
+
+        svg = f'''<svg width="{W}" height="{H}" xmlns="http://www.w3.org/2000/svg"
+            style="background:#fafafa; border-radius:8px; font-family:sans-serif;">
+            <text x="{left_x}" y="20" font-size="12" fill="#888" text-anchor="end">Query (who's looking)</text>
+            <text x="{right_x}" y="20" font-size="12" fill="#888">Key (who's looked at)</text>
+            {"".join(lines)}
+            {labels_left}
+            {labels_right}
+            <text x="{W//2}" y="{H-10}" font-size="10" fill="#888" text-anchor="middle">
+                Red = attention to position 0 (sink) · Blue = attention to other tokens
+            </text>
+        </svg>'''
+        return svg
+
     _layer = hook_layer.value
     _avg = data["standard_attn"][_layer].mean(axis=0)
     _sink_pct = data["standard_attn"][_layer, :, :, 0].mean() * 100
@@ -570,6 +626,9 @@ def hook_viz(data, mo, np, plt, hook_layer):
                 kind="neutral" if _status == "healthy" else "warn" if _status == "forming" else "danger",
             ),
             mo.accordion({
+                "Attention flow (interactive)": mo.Html(_build_flow_svg(
+                    data["standard_attn"][_layer], data["tokens"],
+                )),
                 "Input text": mo.md(f"*{data['text']}*"),
                 "Key terms": mo.md("""
 **Layer** — 12 stacked stages; deeper = more abstract. Sinks worsen with depth.
