@@ -215,7 +215,13 @@ def precompute():
             _tokenizer = None
             _std_ppl_input = float(_cached.get("std_ppl_input", 0))
             _sink_ppl_input = float(_cached.get("sink_ppl_input", 0))
-            # Adaptive validation runs lazily in adaptive_viz cell
+            _adaptive_val = None
+            if "adapt_top1" in _cached:
+                _adaptive_val = {
+                    "top1_match": float(_cached["adapt_top1"]),
+                    "standard_ppl": float(_cached["adapt_std_ppl"]),
+                    "adaptive_ppl": float(_cached["adapt_adp_ppl"]),
+                }
     else:
         # --- Full computation with progress ---
         with mo.status.spinner("Loading GPT-2...") as _status:
@@ -337,7 +343,60 @@ def precompute():
 
             # Temperature computed on-the-fly in fix_comparison cell (fast numpy softmax)
 
-            # Adaptive validation moved to adaptive_viz cell (lazy, needs model)
+            # --- Adaptive temperature validation ---
+            _status.update("Validating adaptive fix...")
+            _ent_pre = _entropy(_standard_attn)
+            _med_pre = np.median(_ent_pre)
+            _sick_pre = _ent_pre < _med_pre * 0.7
+            _vt = np.ones_like(_ent_pre)
+            _vt[_sick_pre] = np.clip(1.0 + (_med_pre / _ent_pre[_sick_pre] - 1.0), 1.0, 5.0)
+
+            _aqkv = {}
+            def _acap(li):
+                def _h(mod, inp, out): _aqkv[li] = out.detach()
+                return _h
+            def _arep(li):
+                def _h(mod, args):
+                    _qk = _aqkv[li]
+                    _qa, _ka, _va = _qk.split(_d_model, dim=-1)
+                    _ba, _sa = _qa.shape[0], _qa.shape[1]
+                    _qa = _qa.view(_ba, _sa, _n_heads, _d_head).transpose(1, 2)
+                    _ka = _ka.view(_ba, _sa, _n_heads, _d_head).transpose(1, 2)
+                    _va = _va.view(_ba, _sa, _n_heads, _d_head).transpose(1, 2)
+                    _sca = torch.matmul(_qa, _ka.transpose(-2, -1)) / (_d_head ** 0.5)
+                    for _hi2 in range(_n_heads):
+                        if _vt[li, _hi2] > 1.0:
+                            _sca[:, _hi2] = _sca[:, _hi2] / _vt[li, _hi2]
+                    _cma = torch.tril(torch.ones(_sa, _sa)).unsqueeze(0).unsqueeze(0)
+                    _sca = _sca.masked_fill(_cma == 0, float("-inf"))
+                    _awa = torch.nn.functional.softmax(_sca, dim=-1)
+                    _aoa = torch.matmul(_awa, _va)
+                    _aoa = _aoa.transpose(1, 2).contiguous().view(_ba, _sa, _d_model)
+                    return (_aoa,) + args[1:]
+                return _h
+
+            _adapt_hooks = []
+            for _i, _block in enumerate(_model.transformer.h):
+                _adapt_hooks.append(_block.attn.c_attn.register_forward_hook(_acap(_i)))
+                _adapt_hooks.append(_block.attn.c_proj.register_forward_pre_hook(_arep(_i)))
+            with torch.no_grad():
+                _adp_out = _model(**_inputs)
+            for _h in _adapt_hooks:
+                _h.remove()
+
+            import math as _math
+            _std_lg = _standard_out.logits[0]
+            _adp_lg = _adp_out.logits[0]
+            _adapt_top1 = float((_std_lg.argmax(-1) == _adp_lg.argmax(-1)).float().mean()) * 100
+            _adapt_std_ppl = _math.exp(float(torch.nn.functional.cross_entropy(
+                _std_lg[:-1], _inputs["input_ids"][0, 1:])))
+            _adapt_adp_ppl = _math.exp(float(torch.nn.functional.cross_entropy(
+                _adp_lg[:-1], _inputs["input_ids"][0, 1:])))
+            _adaptive_val = {
+                "top1_match": round(_adapt_top1, 1),
+                "standard_ppl": round(_adapt_std_ppl, 2),
+                "adaptive_ppl": round(_adapt_adp_ppl, 2),
+            }
 
             # --- Save cache (compact — no temp sweep) ---
             _status.update("Saving cache...")
@@ -353,6 +412,9 @@ def precompute():
                 "n_heads": _n_heads,
                 "std_ppl_input": _std_ppl_input,
                 "sink_ppl_input": _sink_ppl_input,
+                "adapt_top1": _adaptive_val["top1_match"],
+                "adapt_std_ppl": _adaptive_val["standard_ppl"],
+                "adapt_adp_ppl": _adaptive_val["adaptive_ppl"],
             })
 
     # --- Color constants ---
@@ -390,6 +452,7 @@ def precompute():
         "from_cache": _from_cache,
         "std_ppl_input": _std_ppl_input,
         "sink_ppl_input": _sink_ppl_input,
+        "adaptive_val": _adaptive_val,
         "colors": {
             "standard": _C_STD,
             "temp": _C_TEMP,
@@ -543,7 +606,7 @@ def fix_controls(mo):
     mo.output.replace(
         mo.vstack([
             mo.md("""
-## Fixes That Survived
+## Redistribution Experiments
 
 **Temperature scaling** divides scores by T before softmax — spreads attention more evenly.
 **Sink token** prepends a garbage token at position 0 — gives the model a proper dump target.
@@ -1508,96 +1571,38 @@ def adaptive_viz(data, mo, np, plt, adapt_strength):
 
 @app.cell(hide_code=True)
 def adaptive_validation(data, mo, np):
-    import torch as _torch
-    from transformers import AutoModelForCausalLM as _AMLM, AutoTokenizer as _AT
-    import math as _math
+    _n_sick = int((data["entropy_standard"] < np.median(data["entropy_standard"]) * 0.7).sum())
 
-    _ent_std = data["entropy_standard"]
-    _median = np.median(_ent_std)
-    _threshold = _median * 0.7
-    _n_l = data["n_layers"]
-    _n_h = data["n_heads"]
-    _sick = _ent_std < _threshold
-    _n_sick = int(_sick.sum())
-
-    with mo.status.spinner("Validating adaptive fix with real forward pass..."):
-        _model = _AMLM.from_pretrained("gpt2", attn_implementation="eager")
-        _tok = _AT.from_pretrained("gpt2")
-        _model.eval()
-        _inputs = _tok(data["text"], return_tensors="pt")
-        _d_model = _model.config.n_embd
-        _d_head = _d_model // _n_h
-
-        _vt_map = np.ones((_n_l, _n_h))
-        _vt_map[_sick] = np.clip(
-            1.0 + 1.0 * (_median / _ent_std[_sick] - 1.0), 1.0, 5.0,
-        )
-
-        _aqkv = {}
-
-        def _acap(li):
-            def _h(mod, inp, out):
-                _aqkv[li] = out.detach()
-            return _h
-
-        def _arep(li):
-            def _h(mod, args):
-                _qkv = _aqkv[li]
-                _q, _k, _v = _qkv.split(_d_model, dim=-1)
-                _b, _s = _q.shape[0], _q.shape[1]
-                _q = _q.view(_b, _s, _n_h, _d_head).transpose(1, 2)
-                _k = _k.view(_b, _s, _n_h, _d_head).transpose(1, 2)
-                _v = _v.view(_b, _s, _n_h, _d_head).transpose(1, 2)
-                _sc = _torch.matmul(_q, _k.transpose(-2, -1)) / (_d_head ** 0.5)
-                for _hi in range(_n_h):
-                    if _vt_map[li, _hi] > 1.0:
-                        _sc[:, _hi] = _sc[:, _hi] / _vt_map[li, _hi]
-                _cm = _torch.tril(_torch.ones(_s, _s)).unsqueeze(0).unsqueeze(0)
-                _sc = _sc.masked_fill(_cm == 0, float("-inf"))
-                _aw = _torch.nn.functional.softmax(_sc, dim=-1)
-                _ao = _torch.matmul(_aw, _v)
-                _ao = _ao.transpose(1, 2).contiguous().view(_b, _s, _d_model)
-                return (_ao,) + args[1:]
-            return _h
-
-        with _torch.no_grad():
-            _std_out = _model(**_inputs)
-
-        _hooks_a = []
-        for _i, _blk in enumerate(_model.transformer.h):
-            _hooks_a.append(_blk.attn.c_attn.register_forward_hook(_acap(_i)))
-            _hooks_a.append(_blk.attn.c_proj.register_forward_pre_hook(_arep(_i)))
-        with _torch.no_grad():
-            _adp_out = _model(**_inputs)
-        for _hk in _hooks_a:
-            _hk.remove()
-        del _model
-
-        _std_logits = _std_out.logits[0]
-        _adp_logits = _adp_out.logits[0]
-        _top1 = float((_std_logits.argmax(-1) == _adp_logits.argmax(-1)).float().mean()) * 100
-        _std_ppl = _math.exp(float(_torch.nn.functional.cross_entropy(
-            _std_logits[:-1], _inputs["input_ids"][0, 1:])))
-        _adp_ppl = _math.exp(float(_torch.nn.functional.cross_entropy(
-            _adp_logits[:-1], _inputs["input_ids"][0, 1:])))
-
-    mo.output.replace(
-        mo.vstack([
-            mo.hstack([
-                mo.stat(value=f"{_adp_ppl:.1f}", label=f"PPL with fix (baseline: {_std_ppl:.1f})", bordered=True),
-                mo.stat(value=f"{_top1:.0f}%", label="top-1 token agreement", bordered=True),
-                mo.stat(value=f"{_n_sick}", label="heads treated", bordered=True),
-            ], justify="center", gap=1),
-            mo.callout(
-                mo.md(f"""
+    # Use cached validation if available, otherwise show placeholder
+    _val = data.get("adaptive_val")
+    if _val is not None:
+        _adp_ppl = _val["adaptive_ppl"]
+        _std_ppl = _val["standard_ppl"]
+        _top1 = _val["top1_match"]
+        mo.output.replace(
+            mo.vstack([
+                mo.hstack([
+                    mo.stat(value=f"{_adp_ppl:.1f}", label=f"PPL with fix (baseline: {_std_ppl:.1f})", bordered=True),
+                    mo.stat(value=f"{_top1:.0f}%", label="top-1 token agreement", bordered=True),
+                    mo.stat(value=f"{_n_sick}", label="heads treated", bordered=True),
+                ], justify="center", gap=1),
+                mo.callout(
+                    mo.md(f"""
 **Validated with a real modified forward pass** (strength=1.0). The model's
 top-1 predictions agree {_top1:.0f}% of the time. Perplexity: {_std_ppl:.1f} → {_adp_ppl:.1f}.
 {"The fix barely changes the output — the model routes around the treatment, confirming sinks are load-bearing." if _top1 > 90 else "The fix changes the output meaningfully — some sinks were genuinely wasting capacity."}
 """),
-                kind="success" if _top1 > 90 else "warn",
-            ),
-        ])
-    )
+                    kind="success" if _top1 > 90 else "warn",
+                ),
+            ])
+        )
+    else:
+        mo.output.replace(
+            mo.callout(
+                mo.md(f"*Forward pass validation runs on first cold start. {_n_sick} heads would be treated.*"),
+                kind="neutral",
+            )
+        )
 
 
 # ============================================================================
@@ -1754,7 +1759,7 @@ from scratch produce healthier attention than retrofitting a sink token?
 ### What might actually work
 
 Every fix we tested accepts the softmax constraint and tries to work around
-it. The results suggest the constraint itself is the problem. Two directions
+it. The results suggest the constraint itself is the problem. Three directions
 worth investigating:
 
 **1. Learned register tokens** ([Darcet et al., 2024](https://alphaxiv.org/abs/2309.16588) —
