@@ -35,8 +35,8 @@ def title():
     import marimo as _mo
     _mo.output.replace(
         _mo.md("""
-# Attention Sinks Are the Model's OFF Switch
-## Better models use it more. Here's the proof.
+# Every Transformer Has a Garbage Bin
+## It's not a bug. But you can build a better one.
 """)
     )
 
@@ -90,22 +90,22 @@ def executive_summary(data, mo, np, plt):
 all interactive below.*
 
 GPT-2 dumps over 44% of its attention budget on one meaningless token.
-That's not a bug — it's the model's learned OFF switch. When a head has
-nothing useful to attend to, softmax forces it to put 100% somewhere.
-Position 0 becomes the parking spot: concentrated garbage beats
-distributed garbage.
+That's not a bug — it's a garbage bin. When a head has nothing useful
+to attend to, softmax forces it to put 100% somewhere. Position 0
+becomes the dump target: concentrated garbage in one place beats
+spreading it across every word.
 
 I tested 8 fixes. None eliminate sinks. I zeroed out 31 sink heads:
 perplexity rose by 55. Zeroing 31 random heads? **+1,611.** Sink heads
 are 29× less critical — but non-negotiable. The one thing that worked:
-correcting the parking spot's representation (768 parameters, model
-frozen) **improved perplexity by 5.3%** — a sink-specific intervention,
-not generic prompt tuning. Cross-architecture validation on
+building a better garbage bin (768 parameters, model frozen) **improved
+perplexity by 5.3%** — a sink-specific intervention, not generic prompt
+tuning. Cross-architecture validation on
 Pythia-70M confirms the mechanism is universal.
 """),
             _fig_bar,
             mo.hstack([
-                mo.stat(value="-5.3%", label="PPL from correcting the parking spot", bordered=True),
+                mo.stat(value="-5.3%", label="PPL from a better garbage bin", bordered=True),
                 mo.stat(value="29×", label="less critical than random heads", bordered=True),
                 mo.stat(value="768", label="parameters (of 124M) to improve it", bordered=True),
             ], justify="center", gap=1),
@@ -1302,10 +1302,10 @@ Provably Necessary"*
 pre-norm transformers mathematically require sinks for representational
 stability.
 
-### The one thing that worked: a learned OFF switch
+### The one thing that worked: a better garbage bin
 
-If the sink is a makeshift OFF switch hijacking a real token, what happens
-when you give the model a *purpose-built* one? I trained a single embedding
+The model is using a real word as its dump target. What happens
+when you give it a *purpose-built* one? I trained a single embedding
 vector (768 parameters, model frozen). I tested three interventions to
 separate the sink effect from generic prompt tuning.
 """),
@@ -1325,11 +1325,14 @@ separate the sink effect from generic prompt tuning.
 
 The critical comparison: the embedding offset modifies *only* position 0's
 representation — no extra tokens, no sequence length change, no prompt tuning.
-Same 768 parameters, same eval protocol. The 5.3% improvement is entirely
-from correcting the parking spot.
+The 5.3% improvement comes entirely from building a better garbage bin.
+
+Changing how much attention *goes* to the bin (attention bias) makes things
+worse. The model's garbage allocation is already optimal. You can only
+improve the *bin*, not the *amount of garbage*.
 
 Prepending multiple tokens gives a larger improvement (-19.7%) but conflates
-the sink fix with general [soft prompting](https://alphaxiv.org/abs/2104.08691)
+the bin upgrade with general [soft prompting](https://alphaxiv.org/abs/2104.08691)
 (Lester et al., 2021). The embedding offset is the clean, defensible result.
 
 Sinks didn't decrease — they stayed at ~41%. But the model got better at
@@ -1788,9 +1791,9 @@ noise). **Concentrated garbage beats distributed garbage.** Dump on
 position 0 and the damage is contained. Spread randomly and you corrupt
 every representation a little.
 
-The sink is the model's **OFF switch** — its solution to "I have nothing
-useful to do right now." Not a malfunction, but a learned mechanism for
-managing unused capacity.
+The sink is the model's **garbage bin** — its solution to "I have nothing
+useful to do right now, but softmax says I have to put my attention
+*somewhere*." Not a malfunction. Infrastructure.
 
 That's why training can't eliminate sinks. The architecture *requires*
 them. And a better model has more sinks, not fewer: more specialized
