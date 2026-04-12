@@ -1380,8 +1380,6 @@ Drag the slider to control treatment strength. Watch the entropy grid heal.
 
 @app.cell(hide_code=True)
 def adaptive_viz(data, mo, np, plt, adapt_strength):
-    from matplotlib.patches import Rectangle as _Rect
-
     _ent_std = data["entropy_standard"]
     _median = np.median(_ent_std)
     _threshold = _median * 0.7
@@ -1444,82 +1442,102 @@ def adaptive_viz(data, mo, np, plt, adapt_strength):
     )
     plt.tight_layout()
 
-    # --- Validation: real modified forward pass (lazy, runs once) ---
-    _val_elements = []
-    try:
-        import torch as _torch
-        from transformers import AutoModelForCausalLM as _AMLM, AutoTokenizer as _AT
-        import math as _math
+    mo.output.replace(
+        mo.vstack([
+            _fig,
+            mo.md(f"""
+**Sick heads:** {_n_sick_before} → {_n_sick_after} ({_healed} healed) ·
+**Sink waste:** {_sink_before:.1f}% → {_sink_after:.1f}%
+"""),
+        ])
+    )
 
-        with mo.status.spinner("Validating with modified forward pass..."):
-            _model = _AMLM.from_pretrained("gpt2", attn_implementation="eager")
-            _tok = _AT.from_pretrained("gpt2")
-            _model.eval()
-            _inputs = _tok(data["text"], return_tensors="pt")
-            _d_model = _model.config.n_embd
-            _d_head = _d_model // _n_h
 
-            # Temperature map at strength=1.0 for validation
-            _vt_map = np.ones((_n_l, _n_h))
-            _vt_map[_sick] = np.clip(
-                1.0 + 1.0 * (_median / _ent_std[_sick] - 1.0), 1.0, 5.0,
-            )
+# ============================================================================
+# CELL 11B: ADAPTIVE FIX VALIDATION (runs once, no slider dependency)
+# ============================================================================
 
-            _aqkv = {}
+@app.cell(hide_code=True)
+def adaptive_validation(data, mo, np):
+    import torch as _torch
+    from transformers import AutoModelForCausalLM as _AMLM, AutoTokenizer as _AT
+    import math as _math
 
-            def _acap(li):
-                def _h(mod, inp, out):
-                    _aqkv[li] = out.detach()
-                return _h
+    _ent_std = data["entropy_standard"]
+    _median = np.median(_ent_std)
+    _threshold = _median * 0.7
+    _n_l = data["n_layers"]
+    _n_h = data["n_heads"]
+    _sick = _ent_std < _threshold
+    _n_sick = int(_sick.sum())
 
-            def _arep(li):
-                def _h(mod, args):
-                    _qkv = _aqkv[li]
-                    _q, _k, _v = _qkv.split(_d_model, dim=-1)
-                    _b, _s = _q.shape[0], _q.shape[1]
-                    _q = _q.view(_b, _s, _n_h, _d_head).transpose(1, 2)
-                    _k = _k.view(_b, _s, _n_h, _d_head).transpose(1, 2)
-                    _v = _v.view(_b, _s, _n_h, _d_head).transpose(1, 2)
-                    _sc = _torch.matmul(_q, _k.transpose(-2, -1)) / (_d_head ** 0.5)
-                    for _hi in range(_n_h):
-                        if _vt_map[li, _hi] > 1.0:
-                            _sc[:, _hi] = _sc[:, _hi] / _vt_map[li, _hi]
-                    _cm = _torch.tril(_torch.ones(_s, _s)).unsqueeze(0).unsqueeze(0)
-                    _sc = _sc.masked_fill(_cm == 0, float("-inf"))
-                    _aw = _torch.nn.functional.softmax(_sc, dim=-1)
-                    _ao = _torch.matmul(_aw, _v)
-                    _ao = _ao.transpose(1, 2).contiguous().view(_b, _s, _d_model)
-                    return (_ao,) + args[1:]
-                return _h
+    with mo.status.spinner("Validating adaptive fix with real forward pass..."):
+        _model = _AMLM.from_pretrained("gpt2", attn_implementation="eager")
+        _tok = _AT.from_pretrained("gpt2")
+        _model.eval()
+        _inputs = _tok(data["text"], return_tensors="pt")
+        _d_model = _model.config.n_embd
+        _d_head = _d_model // _n_h
 
-            # Standard pass for baseline
-            with _torch.no_grad():
-                _std_out = _model(**_inputs)
+        _vt_map = np.ones((_n_l, _n_h))
+        _vt_map[_sick] = np.clip(
+            1.0 + 1.0 * (_median / _ent_std[_sick] - 1.0), 1.0, 5.0,
+        )
 
-            # Modified pass
-            _hooks_a = []
-            for _i, _blk in enumerate(_model.transformer.h):
-                _hooks_a.append(_blk.attn.c_attn.register_forward_hook(_acap(_i)))
-                _hooks_a.append(_blk.attn.c_proj.register_forward_pre_hook(_arep(_i)))
-            with _torch.no_grad():
-                _adp_out = _model(**_inputs)
-            for _hk in _hooks_a:
-                _hk.remove()
-            del _model
+        _aqkv = {}
 
-            _std_logits = _std_out.logits[0]
-            _adp_logits = _adp_out.logits[0]
-            _top1 = float((_std_logits.argmax(-1) == _adp_logits.argmax(-1)).float().mean()) * 100
-            _std_ppl = _math.exp(float(_torch.nn.functional.cross_entropy(
-                _std_logits[:-1], _inputs["input_ids"][0, 1:])))
-            _adp_ppl = _math.exp(float(_torch.nn.functional.cross_entropy(
-                _adp_logits[:-1], _inputs["input_ids"][0, 1:])))
+        def _acap(li):
+            def _h(mod, inp, out):
+                _aqkv[li] = out.detach()
+            return _h
 
-        _val_elements = [
+        def _arep(li):
+            def _h(mod, args):
+                _qkv = _aqkv[li]
+                _q, _k, _v = _qkv.split(_d_model, dim=-1)
+                _b, _s = _q.shape[0], _q.shape[1]
+                _q = _q.view(_b, _s, _n_h, _d_head).transpose(1, 2)
+                _k = _k.view(_b, _s, _n_h, _d_head).transpose(1, 2)
+                _v = _v.view(_b, _s, _n_h, _d_head).transpose(1, 2)
+                _sc = _torch.matmul(_q, _k.transpose(-2, -1)) / (_d_head ** 0.5)
+                for _hi in range(_n_h):
+                    if _vt_map[li, _hi] > 1.0:
+                        _sc[:, _hi] = _sc[:, _hi] / _vt_map[li, _hi]
+                _cm = _torch.tril(_torch.ones(_s, _s)).unsqueeze(0).unsqueeze(0)
+                _sc = _sc.masked_fill(_cm == 0, float("-inf"))
+                _aw = _torch.nn.functional.softmax(_sc, dim=-1)
+                _ao = _torch.matmul(_aw, _v)
+                _ao = _ao.transpose(1, 2).contiguous().view(_b, _s, _d_model)
+                return (_ao,) + args[1:]
+            return _h
+
+        with _torch.no_grad():
+            _std_out = _model(**_inputs)
+
+        _hooks_a = []
+        for _i, _blk in enumerate(_model.transformer.h):
+            _hooks_a.append(_blk.attn.c_attn.register_forward_hook(_acap(_i)))
+            _hooks_a.append(_blk.attn.c_proj.register_forward_pre_hook(_arep(_i)))
+        with _torch.no_grad():
+            _adp_out = _model(**_inputs)
+        for _hk in _hooks_a:
+            _hk.remove()
+        del _model
+
+        _std_logits = _std_out.logits[0]
+        _adp_logits = _adp_out.logits[0]
+        _top1 = float((_std_logits.argmax(-1) == _adp_logits.argmax(-1)).float().mean()) * 100
+        _std_ppl = _math.exp(float(_torch.nn.functional.cross_entropy(
+            _std_logits[:-1], _inputs["input_ids"][0, 1:])))
+        _adp_ppl = _math.exp(float(_torch.nn.functional.cross_entropy(
+            _adp_logits[:-1], _inputs["input_ids"][0, 1:])))
+
+    mo.output.replace(
+        mo.vstack([
             mo.hstack([
                 mo.stat(value=f"{_adp_ppl:.1f}", label=f"PPL with fix (baseline: {_std_ppl:.1f})", bordered=True),
                 mo.stat(value=f"{_top1:.0f}%", label="top-1 token agreement", bordered=True),
-                mo.stat(value=f"{_healed}", label=f"heads healed (of {_n_sick_before} sick)", bordered=True),
+                mo.stat(value=f"{_n_sick}", label="heads treated", bordered=True),
             ], justify="center", gap=1),
             mo.callout(
                 mo.md(f"""
@@ -1529,18 +1547,6 @@ top-1 predictions agree {_top1:.0f}% of the time. Perplexity: {_std_ppl:.1f} →
 """),
                 kind="success" if _top1 > 90 else "warn",
             ),
-        ]
-    except Exception:
-        _val_elements = []
-
-    mo.output.replace(
-        mo.vstack([
-            _fig,
-            mo.md(f"""
-**Sick heads:** {_n_sick_before} → {_n_sick_after} ({_healed} healed) ·
-**Sink waste:** {_sink_before:.1f}% → {_sink_after:.1f}%
-"""),
-            *_val_elements,
         ])
     )
 
