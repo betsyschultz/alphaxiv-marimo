@@ -560,19 +560,39 @@ def layer_walk_viz(data, mo, np, plt, walk_layer):
 
 
 # ============================================================================
-# CELL 2: ESA SECTION (compressed — toggle + result in one cell)
+# CELL 2: ESA CONTROLS
+# ============================================================================
+
+@app.cell
+def esa_controls(mo):
+    esa_toggle = mo.ui.switch(label="Enable ESA", value=False)
+    esa_layer = mo.ui.slider(start=0, stop=11, value=8, label="Layer", show_value=True)
+
+    mo.output.replace(
+        mo.vstack([
+            mo.md("""
+### Does blocking self-attention fix the sink?
+
+[Exclusive Self Attention](https://alphaxiv.org/abs/2603.09078) (Zhai, 2025)
+blocks the diagonal — tokens can't attend to themselves. Toggle it on:
+"""),
+            mo.hstack([esa_toggle, esa_layer], justify="start", gap=1),
+        ])
+    )
+    return esa_toggle, esa_layer
+
+
+# ============================================================================
+# CELL 2B: ESA RESULT
 # ============================================================================
 
 @app.cell(hide_code=True)
-def esa_section(data, mo, np, plt):
-    _toggle = mo.ui.switch(label="Enable ESA", value=False)
-    _layer_sl = mo.ui.slider(start=0, stop=11, value=8, label="Layer", show_value=True)
-
-    _layer = _layer_sl.value
+def esa_result(data, mo, np, plt, esa_toggle, esa_layer):
+    _layer = esa_layer.value
     _std = data["standard_attn"][_layer].mean(axis=0)
     _esa = data["esa_attn"][_layer].mean(axis=0)
-    _right = _esa if _toggle.value else _std
-    _rtitle = "Exclusive Self-Attention" if _toggle.value else "Standard (toggle above)"
+    _right = _esa if esa_toggle.value else _std
+    _rtitle = "Exclusive Self-Attention" if esa_toggle.value else "Standard (toggle above)"
     _vmax = max(_std.max(), _right.max())
 
     _fig, _axes = plt.subplots(1, 2, figsize=(12, 4.5))
@@ -586,13 +606,6 @@ def esa_section(data, mo, np, plt):
 
     mo.output.replace(
         mo.vstack([
-            mo.md("""
-### Does blocking self-attention fix the sink?
-
-[Exclusive Self Attention](https://alphaxiv.org/abs/2603.09078) (Zhai, 2025)
-blocks the diagonal — tokens can't attend to themselves. Toggle it on:
-"""),
-            mo.hstack([_toggle, _layer_sl], justify="start", gap=1),
             _fig,
             mo.callout(
                 mo.md("""
