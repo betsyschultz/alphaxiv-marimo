@@ -211,7 +211,7 @@ def precompute():
             # Model loaded lazily in try-it-yourself cell
             _model = None
             _tokenizer = None
-            _adaptive_validation = None  # computed only on cold start
+            # Adaptive validation runs lazily in adaptive_viz cell
     else:
         # --- Full computation with progress ---
         with mo.status.spinner("Loading GPT-2...") as _status:
@@ -253,7 +253,7 @@ def precompute():
 
             _standard_attn = np.stack(
                 [_layer[0].numpy() for _layer in _standard_out.attentions]
-            )
+            ).astype(np.float32)
 
             # --- Extract raw QK scores ---
             _status.update("Extracting QK scores...")
@@ -272,7 +272,7 @@ def precompute():
                     _causal_mask == 0, float("-inf")
                 )
                 _raw_scores_all.append(_scores[0].numpy())
-            _raw_scores_all = np.stack(_raw_scores_all)
+            _raw_scores_all = np.stack(_raw_scores_all).astype(np.float32)
 
             # --- ESA: zero diagonal, renormalize ---
             _status.update("Computing ESA...")
@@ -315,89 +315,11 @@ def precompute():
 
             _sink_attn_full = np.stack(
                 [_layer[0].numpy() for _layer in _sink_out.attentions]
-            )
+            ).astype(np.float32)
 
             # Temperature computed on-the-fly in fix_comparison cell (fast numpy softmax)
 
-            # --- Adaptive temperature validation (one modified forward pass) ---
-            _status.update("Validating adaptive fix...")
-            _ent_std = _entropy(_standard_attn)
-            _med_ent = np.median(_ent_std)
-            _thresh_ent = _med_ent * 0.7
-            _t_map = np.ones_like(_ent_std)
-            _sick_mask = _ent_std < _thresh_ent
-            _t_map[_sick_mask] = np.clip(
-                1.0 + (_med_ent / _ent_std[_sick_mask] - 1.0), 1.0, 5.0
-            )
-
-            # Hook: capture QKV, recompute attention with per-head temperature
-            _adapt_qkv = {}
-
-            def _adapt_capture(li):
-                def _h(mod, inp, out):
-                    _adapt_qkv[li] = out.detach()
-                return _h
-
-            def _adapt_replace(li):
-                def _h(mod, args):
-                    _qkv = _adapt_qkv[li]
-                    _q, _k, _v = _qkv.split(_d_model, dim=-1)
-                    _bsz, _sl2 = _q.shape[0], _q.shape[1]
-                    _q = _q.view(_bsz, _sl2, _n_heads, _d_head).transpose(1, 2)
-                    _k = _k.view(_bsz, _sl2, _n_heads, _d_head).transpose(1, 2)
-                    _v = _v.view(_bsz, _sl2, _n_heads, _d_head).transpose(1, 2)
-                    _sc = torch.matmul(_q, _k.transpose(-2, -1)) / (_d_head ** 0.5)
-                    for _hi in range(_n_heads):
-                        if _t_map[li, _hi] > 1.0:
-                            _sc[:, _hi] = _sc[:, _hi] / _t_map[li, _hi]
-                    _cm = torch.tril(torch.ones(_sl2, _sl2)).unsqueeze(0).unsqueeze(0)
-                    _sc = _sc.masked_fill(_cm == 0, float("-inf"))
-                    _aw = torch.nn.functional.softmax(_sc, dim=-1)
-                    _ao = torch.matmul(_aw, _v)
-                    _ao = _ao.transpose(1, 2).contiguous().view(_bsz, _sl2, _d_model)
-                    return (_ao,) + args[1:]
-                return _h
-
-            _adapt_hooks = []
-            for _i, _block in enumerate(_model.transformer.h):
-                _adapt_hooks.append(
-                    _block.attn.c_attn.register_forward_hook(_adapt_capture(_i))
-                )
-                _adapt_hooks.append(
-                    _block.attn.c_proj.register_forward_pre_hook(_adapt_replace(_i))
-                )
-
-            with torch.no_grad():
-                _adapt_out = _model(**_inputs)
-
-            for _h in _adapt_hooks:
-                _h.remove()
-
-            # Compare logits
-            _std_logits = _standard_out.logits[0]
-            _adp_logits = _adapt_out.logits[0]
-            _std_top = _std_logits.argmax(dim=-1)
-            _adp_top = _adp_logits.argmax(dim=-1)
-            _top1_match = float((_std_top == _adp_top).float().mean())
-
-            # Perplexity on input text
-            _adp_loss = torch.nn.functional.cross_entropy(
-                _adp_logits[:-1], _inputs["input_ids"][0, 1:],
-            )
-            _std_loss = torch.nn.functional.cross_entropy(
-                _std_logits[:-1], _inputs["input_ids"][0, 1:],
-            )
-            import math as _math
-            _adaptive_ppl = _math.exp(float(_adp_loss))
-            _standard_ppl_input = _math.exp(float(_std_loss))
-
-            _adaptive_validation = {
-                "temp_map": _t_map,
-                "adaptive_ppl": round(_adaptive_ppl, 2),
-                "standard_ppl_input": round(_standard_ppl_input, 2),
-                "top1_match": round(_top1_match * 100, 1),
-                "n_treated": int(_sick_mask.sum()),
-            }
+            # Adaptive validation moved to adaptive_viz cell (lazy, needs model)
 
             # --- Save cache (compact — no temp sweep) ---
             _status.update("Saving cache...")
@@ -446,7 +368,6 @@ def precompute():
         "tokenizer": _tokenizer,
         "elapsed": time.time() - _start,
         "from_cache": _from_cache,
-        "adaptive_validation": _adaptive_validation,
         "colors": {
             "standard": _C_STD,
             "temp": _C_TEMP,
@@ -1608,38 +1529,94 @@ def adaptive_viz(data, mo, np, plt, adapt_strength):
     )
     plt.tight_layout()
 
-    # --- Validation callout ---
-    _val = data["adaptive_validation"]
+    # --- Validation: real modified forward pass (lazy, runs once) ---
     _val_elements = []
-    if _val is not None:
+    try:
+        import torch as _torch
+        from transformers import AutoModelForCausalLM as _AMLM, AutoTokenizer as _AT
+        import math as _math
+
+        with mo.status.spinner("Validating with modified forward pass..."):
+            _model = _AMLM.from_pretrained("gpt2", attn_implementation="eager")
+            _tok = _AT.from_pretrained("gpt2")
+            _model.eval()
+            _inputs = _tok(data["text"], return_tensors="pt")
+            _d_model = _model.config.n_embd
+            _d_head = _d_model // _n_h
+
+            # Temperature map at strength=1.0 for validation
+            _vt_map = np.ones((_n_l, _n_h))
+            _vt_map[_sick] = np.clip(
+                1.0 + 1.0 * (_median / _ent_std[_sick] - 1.0), 1.0, 5.0,
+            )
+
+            _aqkv = {}
+
+            def _acap(li):
+                def _h(mod, inp, out):
+                    _aqkv[li] = out.detach()
+                return _h
+
+            def _arep(li):
+                def _h(mod, args):
+                    _qkv = _aqkv[li]
+                    _q, _k, _v = _qkv.split(_d_model, dim=-1)
+                    _b, _s = _q.shape[0], _q.shape[1]
+                    _q = _q.view(_b, _s, _n_h, _d_head).transpose(1, 2)
+                    _k = _k.view(_b, _s, _n_h, _d_head).transpose(1, 2)
+                    _v = _v.view(_b, _s, _n_h, _d_head).transpose(1, 2)
+                    _sc = _torch.matmul(_q, _k.transpose(-2, -1)) / (_d_head ** 0.5)
+                    for _hi in range(_n_h):
+                        if _vt_map[li, _hi] > 1.0:
+                            _sc[:, _hi] = _sc[:, _hi] / _vt_map[li, _hi]
+                    _cm = _torch.tril(_torch.ones(_s, _s)).unsqueeze(0).unsqueeze(0)
+                    _sc = _sc.masked_fill(_cm == 0, float("-inf"))
+                    _aw = _torch.nn.functional.softmax(_sc, dim=-1)
+                    _ao = _torch.matmul(_aw, _v)
+                    _ao = _ao.transpose(1, 2).contiguous().view(_b, _s, _d_model)
+                    return (_ao,) + args[1:]
+                return _h
+
+            # Standard pass for baseline
+            with _torch.no_grad():
+                _std_out = _model(**_inputs)
+
+            # Modified pass
+            _hooks_a = []
+            for _i, _blk in enumerate(_model.transformer.h):
+                _hooks_a.append(_blk.attn.c_attn.register_forward_hook(_acap(_i)))
+                _hooks_a.append(_blk.attn.c_proj.register_forward_pre_hook(_arep(_i)))
+            with _torch.no_grad():
+                _adp_out = _model(**_inputs)
+            for _hk in _hooks_a:
+                _hk.remove()
+            del _model
+
+            _std_logits = _std_out.logits[0]
+            _adp_logits = _adp_out.logits[0]
+            _top1 = float((_std_logits.argmax(-1) == _adp_logits.argmax(-1)).float().mean()) * 100
+            _std_ppl = _math.exp(float(_torch.nn.functional.cross_entropy(
+                _std_logits[:-1], _inputs["input_ids"][0, 1:])))
+            _adp_ppl = _math.exp(float(_torch.nn.functional.cross_entropy(
+                _adp_logits[:-1], _inputs["input_ids"][0, 1:])))
+
         _val_elements = [
             mo.hstack([
-                mo.stat(
-                    value=f"{_val['adaptive_ppl']:.1f}",
-                    label=f"PPL with fix (baseline: {_val['standard_ppl_input']:.1f})",
-                    bordered=True,
-                ),
-                mo.stat(
-                    value=f"{_val['top1_match']}%",
-                    label="top-1 token agreement",
-                    bordered=True,
-                ),
-                mo.stat(
-                    value=f"{_healed}",
-                    label=f"heads healed (of {_n_sick_before} sick)",
-                    bordered=True,
-                ),
+                mo.stat(value=f"{_adp_ppl:.1f}", label=f"PPL with fix (baseline: {_std_ppl:.1f})", bordered=True),
+                mo.stat(value=f"{_top1:.0f}%", label="top-1 token agreement", bordered=True),
+                mo.stat(value=f"{_healed}", label=f"heads healed (of {_n_sick_before} sick)", bordered=True),
             ], justify="center", gap=1),
             mo.callout(
                 mo.md(f"""
 **Validated with a real modified forward pass** (strength=1.0). The model's
-top-1 predictions match {_val['top1_match']}% of the time. Perplexity goes
-from {_val['standard_ppl_input']} → {_val['adaptive_ppl']}.
-{"The fix barely changes the output — the model routes around the treatment, confirming sinks are load-bearing." if _val['top1_match'] > 90 else "The fix changes the output meaningfully — some of these sinks were genuinely wasting capacity."}
+top-1 predictions agree {_top1:.0f}% of the time. Perplexity: {_std_ppl:.1f} → {_adp_ppl:.1f}.
+{"The fix barely changes the output — the model routes around the treatment, confirming sinks are load-bearing." if _top1 > 90 else "The fix changes the output meaningfully — some sinks were genuinely wasting capacity."}
 """),
-                kind="success" if _val["top1_match"] > 90 else "warn",
+                kind="success" if _top1 > 90 else "warn",
             ),
         ]
+    except Exception:
+        _val_elements = []
 
     mo.output.replace(
         mo.vstack([
