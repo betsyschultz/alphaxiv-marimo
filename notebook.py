@@ -74,7 +74,7 @@ def executive_summary(data, mo, np, plt):
             _lbl, ha="center", va="bottom", fontsize=9, fontweight="bold",
         )
     _ax.set_ylabel("Attention waste on position 0 (%)", fontsize=11)
-    _ax.set_title("Everything We Tried", fontsize=14, fontweight="bold")
+    _ax.set_title("Everything I Tried", fontsize=14, fontweight="bold")
     _ax.set_ylim(0, 62)
     _ax.grid(True, alpha=0.15, axis="y")
     _ax.axhline(y=44.3, color="#e74c3c", linestyle="--", alpha=0.3, linewidth=1)
@@ -95,7 +95,7 @@ nothing useful to attend to, softmax forces it to put 100% somewhere.
 Position 0 becomes the parking spot: concentrated garbage beats
 distributed garbage.
 
-We tested 8 fixes. None eliminate sinks. We zeroed out 31 sink heads:
+I tested 8 fixes. None eliminate sinks. I zeroed out 31 sink heads:
 perplexity rose by 55. Zeroing 31 random heads? **+1,611.** Sink heads
 are 29× less critical — but non-negotiable. The one thing that worked:
 training a purpose-built OFF switch (768 parameters, model frozen)
@@ -676,7 +676,7 @@ One changes the math. The other changes the input.
             mo.accordion({
                 "What about blocking self-attention? (ESA)": mo.md("""
 [Exclusive Self Attention](https://alphaxiv.org/abs/2603.09078) (Zhai, 2026) blocks
-the diagonal — tokens can't attend to themselves. We tested it: **no effect** on
+the diagonal — tokens can't attend to themselves. I tested it: **no effect** on
 sink magnitude at any layer. Sinks aren't caused by self-attention. They're
 structural, tied to pre-norm residual streams. An original diagnostic: ESA meets
 [attention sink research](https://alphaxiv.org/abs/2603.05498), and nothing changes.
@@ -915,7 +915,7 @@ High entropy = looking at many tokens (healthy). Low entropy = fixated on one po
 
 *Threshold: a head is "sick" if its entropy falls below 70% of the median across all heads.
 This is a heuristic, not ground truth — there's no labeled dataset of sick vs. healthy heads.
-We validated the cutoff by checking that heads classified as sick visually show the sink stripe
+I validated the cutoff by checking that heads classified as sick visually show the sink stripe
 in their attention maps, and that the count is stable across nearby thresholds (60-80%).*
 """),
             mo.callout(
@@ -1230,7 +1230,7 @@ loss = lm_loss + lambda_align * align_loss  # lambda swept: 0.1, 0.5, 1.0, 10.0
             mo.md(f"""
 ## The Training Experiment: Can You Train the Sinks Away?
 
-If we know what healthy attention looks like, can we train the model to produce it?
+If I know what healthy attention looks like, can I train the model to produce it?
 I finetuned GPT-2 on WikiText-2 with an alignment loss — standard LM training plus a penalty
 pushing sick heads to distribute attention like healthy neighbors. {_blend["total_steps"]} steps, three epochs.
 
@@ -1537,10 +1537,10 @@ def adaptive_controls(mo):
     mo.output.replace(
         mo.vstack([
             mo.md("""
-## The Adaptive Fix: Can We Heal Sick Heads?
+## The Adaptive Fix: Can I Heal Sick Heads?
 
 The notebook diagnosed which heads are sick. What if the diagnosis *is* the
-treatment? For each sick head, we scale its pre-softmax scores by a
+treatment? For each sick head, I scale its pre-softmax scores by a
 per-head temperature proportional to how far below the healthy threshold
 it falls. Healthy heads are untouched.
 
@@ -1798,7 +1798,7 @@ Pythia's final two layers have *every head* at zero entropy — maximally
 focused on a single token — but it's not position 0. The heads still
 park, just not in the same place.
 
-We hypothesize the difference is positional encoding. GPT-2's learned
+I hypothesize the difference is positional encoding. GPT-2's learned
 absolute embeddings give position 0 a fixed, predictable representation
 that every head can coordinate around. Pythia's
 [rotary embeddings](https://alphaxiv.org/abs/2104.09864) encode position
@@ -1833,14 +1833,14 @@ from scratch produce healthier attention than retrofitting a sink token?
             mo.md("""
 ### What might actually work
 
-Every fix we tested accepts the softmax constraint and tries to work around
+Every fix I tested accepts the softmax constraint and tries to work around
 it. The results suggest the constraint itself is the problem. Three directions
 worth investigating:
 
 **1. Learned register tokens** ([Darcet et al., 2024](https://alphaxiv.org/abs/2309.16588) —
 vision transformers). Instead of retrofitting a sink token, train with explicit
 "parking" tokens from the start. The model learns *how many* parking spots it
-needs per layer rather than hijacking position 0. Our sink token experiment
+needs per layer rather than hijacking position 0. My sink token experiment
 shows the mechanism works; registers formalize it.
 
 **2. Sparse attention with explicit null routing.** Replace softmax with an
