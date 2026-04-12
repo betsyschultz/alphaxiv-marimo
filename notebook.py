@@ -1371,10 +1371,11 @@ def ablation_centerpiece(data, mo, np, plt):
         _cumulative_elements = [
             _fig_cum,
             mo.md("""
-**Follow the green line.** You can remove 30+ sink heads before
-perplexity doubles. The red line — removing important heads first —
-explodes almost immediately. The model can lose its parking lot and barely
-notice. Lose its workers and it collapses.
+**Compare the endpoints.** Remove 30 sink heads and perplexity roughly
+doubles. Remove 30 important heads and it triples. The curves aren't smooth
+— head interactions create spikes when specific combinations break — but the
+overall trajectory is clear: the model tolerates losing its parking lot far
+better than losing its workers.
 """),
         ]
     except Exception:
