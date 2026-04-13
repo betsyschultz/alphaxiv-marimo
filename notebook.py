@@ -100,8 +100,7 @@ it into a **garbage bin**.
 
 I tested 8 ways to fix this. None worked — the model *needs* the garbage
 bin. But I found that training a better one (768 numbers, 2 minutes)
-**makes GPT-2 19.7% better at predicting language — and LLaMA-3.2-1B
-26.7% better.** Same tokens placed at the end? 0% improvement on both
+**makes GPT-2 19.7% better and LLaMA-3.2-1B 26.7% better at predicting language.** Same tokens placed at the end? 0% improvement on both
 models. The effect is entirely about the garbage bin position.
 """),
             _fig_bar,
@@ -1279,9 +1278,10 @@ each repeated three times with different random starting points:
 | 1.0 | 47.8% ± 0.3 | 27.0 | 30 |
 | **10.0** | **45.3% ± 0.4** | **28.7** | **28** |
 
-*Baseline: 47.4% sink waste, 44.5 PPL, 34 sick heads. All runs started from
-fresh GPT-2 weights. Standard deviations across seeds are ±0.2-0.4% — the
-pattern is stable regardless of initialization.*
+*Baseline for this sweep: 47.4% sink waste, 44.5 PPL, 34 sick heads (fresh
+GPT-2 weights, measured at the start of each run — slightly different from
+the notebook's main baseline due to different evaluation points). Standard
+deviations across seeds are ±0.2-0.4%.*
 
 Two patterns. At gentle-to-moderate pressure, sinks actually *increase*
 as the model improves — more specialized workers means more idle time, which
@@ -1824,7 +1824,7 @@ Three architectures, three different sink profiles:
 
 - **GPT-2** (124M, 12 layers, absolute position embeddings): 44% sink waste
 - **Pythia-70M** (70M, 6 layers, rotary embeddings): 3% sink waste — but half its heads are "sick"
-- **LLaMA-3.2-1B** (1.2B, 16 layers, rotary embeddings): **66% sink waste** — the highest of all three
+- **LLaMA-3.2-1B** (1.2B, 16 layers, rotary embeddings): **65.6% sink waste** — the highest of all three
 
 Pythia-70M is the outlier. Its final two layers have every head at zero
 entropy — maximally focused, but not on position 0. With only 6 layers,
