@@ -1915,9 +1915,9 @@ They're 29× less critical than random heads. The high-entropy "noisy"
 heads in layers 0-1 and the final layer are the ones you can't afford
 to lose.
 
-**Limitation:** Validated on GPT-2 and Pythia (both pre-norm). Post-norm
-architectures (PaLM, early BERT) may show different patterns — theory
-predicts reduced sinks, but this remains an open question.
+**Limitation:** Validated on GPT-2, Pythia-70M, and LLaMA-3.2-1B (all
+pre-norm). Post-norm architectures (PaLM, early BERT) may show different
+patterns — theory predicts reduced sinks, but this remains an open question.
 """),
             _download_btn,
         ])
