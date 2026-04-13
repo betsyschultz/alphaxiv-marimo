@@ -1662,8 +1662,8 @@ def try_controls(mo):
     custom_text = mo.ui.text_area(
         value="",
         placeholder="Paste any text here to see its attention sink pattern...",
-        label="Your text (max 500 characters)",
-        max_length=500,
+        label="Your text (truncated to 512 tokens)",
+        max_length=2000,
         full_width=True,
     )
 
@@ -1708,10 +1708,12 @@ def try_viz(data, mo, np, plt, custom_text):
             )
             _tokenizer = AutoTokenizer.from_pretrained("gpt2")
             _model.eval()
+            data["model"] = _model
+            data["tokenizer"] = _tokenizer
 
     with mo.status.spinner("Computing attention..."):
         _inputs = _tokenizer(
-            _text[:500], return_tensors="pt", truncation=True, max_length=512,
+            _text, return_tensors="pt", truncation=True, max_length=512,
         )
         _seq = _inputs["input_ids"].shape[1]
         _toks = [_tokenizer.decode(t) for t in _inputs["input_ids"][0]]
