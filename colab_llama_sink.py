@@ -11,6 +11,17 @@ Results save to llama_sink_results.json — download and add to notebook repo.
 
 # !pip install torch transformers datasets accelerate -q
 
+import os
+# Load HF token from environment, Colab secrets, or ~/.claude/.env
+if not os.environ.get("HF_TOKEN"):
+    for envpath in ["~/.claude/.env", ".env"]:
+        p = os.path.expanduser(envpath)
+        if os.path.exists(p):
+            for line in open(p):
+                if line.startswith("HF_TOKEN=") and line.strip().split("=", 1)[1]:
+                    os.environ["HF_TOKEN"] = line.strip().split("=", 1)[1]
+                    break
+
 import json, math, time, numpy as np, torch
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
