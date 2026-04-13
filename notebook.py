@@ -56,22 +56,25 @@ def executive_summary(data, mo, np, plt):
         "45.3%\n100× pressure\nstill 45%", "45.5%\nworse",
     ]
 
-    _fig_bar, _ax = plt.subplots(figsize=(12, 4))
+    _fig_bar, _ax = plt.subplots(figsize=(12, 4.5))
+    _x = np.arange(len(_approaches))
     _bars = _ax.bar(
-        _approaches, _sink_values, color=_colors, width=0.6,
+        _x, _sink_values, color=_colors, width=0.6,
         edgecolor="white", linewidth=1.5,
     )
     for _bar, _lbl in zip(_bars, _labels):
         _ax.text(
             _bar.get_x() + _bar.get_width() / 2, _bar.get_height() + 1,
-            _lbl, ha="center", va="bottom", fontsize=9, fontweight="bold",
+            _lbl, ha="center", va="bottom", fontsize=8, fontweight="bold",
         )
+    _ax.set_xticks(_x)
+    _ax.set_xticklabels(_approaches, fontsize=8)
     _ax.set_ylabel("Attention waste on position 0 (%)", fontsize=11)
     _ax.set_title("Everything I Tried", fontsize=14, fontweight="bold")
-    _ax.set_ylim(0, 62)
+    _ax.set_ylim(0, 65)
     _ax.grid(True, alpha=0.15, axis="y")
     _ax.axhline(y=44.3, color="#e74c3c", linestyle="--", alpha=0.3, linewidth=1)
-    plt.tight_layout()
+    plt.tight_layout(pad=1.5)
 
     mo.output.replace(
         mo.vstack([
@@ -366,7 +369,6 @@ def precompute():
             for _h in _adapt_hooks:
                 _h.remove()
 
-            import math as _math
             _std_lg = _standard_out.logits[0]
             _adp_lg = _adp_out.logits[0]
             _adapt_top1 = float((_std_lg.argmax(-1) == _adp_lg.argmax(-1)).float().mean()) * 100
@@ -888,8 +890,9 @@ of its attention on the garbage bin.
 
 **Blue = healthy** · **Red = sick** · Start at Layer 7, Head 3 — a clearly sick head.
 
-*The temperature slider above controls the "Temperature scaling" condition here too —
-change it to see how different temperatures affect head health.*
+*Note: the "Temperature scaling" condition uses the temperature slider from
+the previous section. Scroll up to adjust T, then switch to "Temperature
+scaling" here to see how it affects head health.*
 
 *How I define "sick": a head whose attention is more concentrated than 70% of
 all heads. I verified this by checking that heads I classified as sick visually
@@ -1659,6 +1662,29 @@ def adaptive_viz(data, mo, np, plt, adapt_strength):
         label="Entropy (red=sick, blue=healthy)",
     )
 
+    # --- Validation stats (from precompute, no slider dependency) ---
+    _val = data.get("adaptive_val")
+    _val_elements = []
+    if _val is not None:
+        _adp_ppl = _val["adaptive_ppl"]
+        _std_ppl = _val["standard_ppl"]
+        _top1 = _val["top1_match"]
+        _val_elements = [
+            mo.hstack([
+                mo.stat(value=f"{_adp_ppl:.1f}", label=f"PPL with fix (baseline: {_std_ppl:.1f})", bordered=True),
+                mo.stat(value=f"{_top1:.0f}%", label="top-1 token agreement", bordered=True),
+                mo.stat(value=f"{_n_sick_before}", label="heads treated", bordered=True),
+            ], justify="center", gap=1),
+            mo.callout(
+                mo.md(f"""
+**Validated with a real modified forward pass** (strength=1.0). The model's
+top-1 predictions agree {_top1:.0f}% of the time. Perplexity: {_std_ppl:.1f} → {_adp_ppl:.1f}.
+{"The fix barely changes the output — the model routes around the treatment, confirming sinks are load-bearing." if _top1 > 90 else "The fix changes the output meaningfully — some sinks were genuinely wasting capacity."}
+"""),
+                kind="success" if _top1 > 90 else "warn",
+            ),
+        ]
+
     mo.output.replace(
         mo.vstack([
             _fig,
@@ -1666,46 +1692,39 @@ def adaptive_viz(data, mo, np, plt, adapt_strength):
 **Sick heads:** {_n_sick_before} → {_n_sick_after} ({_healed} healed) ·
 **Sink waste:** {_sink_before:.1f}% → {_sink_after:.1f}%
 """),
+            *_val_elements,
         ])
     )
 
 
-# CELL 11B: ADAPTIVE FIX VALIDATION (runs once, no slider dependency)
+# CELL 11C-PRELOAD: LAZY MODEL LOADER (separate from data dict)
 
-@app.cell(hide_code=True)
-def adaptive_validation(data, mo, np):
-    _n_sick = int((data["entropy_standard"] < np.median(data["entropy_standard"]) * 0.7).sum())
+@app.cell
+def model_loader(data):
+    import marimo as _mo
 
-    # Use cached validation if available, otherwise show placeholder
-    _val = data.get("adaptive_val")
-    if _val is not None:
-        _adp_ppl = _val["adaptive_ppl"]
-        _std_ppl = _val["standard_ppl"]
-        _top1 = _val["top1_match"]
-        mo.output.replace(
-            mo.vstack([
-                mo.hstack([
-                    mo.stat(value=f"{_adp_ppl:.1f}", label=f"PPL with fix (baseline: {_std_ppl:.1f})", bordered=True),
-                    mo.stat(value=f"{_top1:.0f}%", label="top-1 token agreement", bordered=True),
-                    mo.stat(value=f"{_n_sick}", label="heads treated", bordered=True),
-                ], justify="center", gap=1),
-                mo.callout(
-                    mo.md(f"""
-**Validated with a real modified forward pass** (strength=1.0). The model's
-top-1 predictions agree {_top1:.0f}% of the time. Perplexity: {_std_ppl:.1f} → {_adp_ppl:.1f}.
-{"The fix barely changes the output — the model routes around the treatment, confirming sinks are load-bearing." if _top1 > 90 else "The fix changes the output meaningfully — some sinks were genuinely wasting capacity."}
-"""),
-                    kind="success" if _top1 > 90 else "warn",
-                ),
-            ])
-        )
-    else:
-        mo.output.replace(
-            mo.callout(
-                mo.md(f"*Forward pass validation runs on first cold start. {_n_sick} heads would be treated.*"),
-                kind="neutral",
-            )
-        )
+    class _LazyModel:
+        """Load GPT-2 on first access, avoid mutating the data dict."""
+        def __init__(self, model, tokenizer):
+            self._model = model
+            self._tokenizer = tokenizer
+            self._loaded = model is not None
+
+        def get(self):
+            if not self._loaded:
+                import torch
+                from transformers import AutoModelForCausalLM, AutoTokenizer
+                with _mo.status.spinner("Loading GPT-2 for interactive use..."):
+                    self._model = AutoModelForCausalLM.from_pretrained(
+                        "gpt2", attn_implementation="eager"
+                    )
+                    self._tokenizer = AutoTokenizer.from_pretrained("gpt2")
+                    self._model.eval()
+                    self._loaded = True
+            return self._model, self._tokenizer
+
+    gpt2_loader = _LazyModel(data["model"], data["tokenizer"])
+    return (gpt2_loader,)
 
 
 # CELL 11C: TRY IT YOURSELF (controls)
@@ -1739,6 +1758,9 @@ def try_controls(mo):
 
 Paste any text and see where GPT-2's attention goes. Does the sink
 still dominate? Pick an example or paste your own.
+
+*First use may take a moment to load the model (CPU inference). All
+attention data above is precomputed.*
 """),
             mo.hstack([example_picker, custom_text], widths=[0.25, 0.75], gap=1),
         ])
@@ -1749,7 +1771,7 @@ still dominate? Pick an example or paste your own.
 # CELL 11D: TRY IT YOURSELF (viz)
 
 @app.cell(hide_code=True)
-def try_viz(data, mo, np, plt, custom_text):
+def try_viz(gpt2_loader, mo, np, plt, custom_text):
     _text = custom_text.value.strip()
     if not _text:
         mo.output.replace(
@@ -1761,19 +1783,8 @@ def try_viz(data, mo, np, plt, custom_text):
         return
 
     import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    _model = data["model"]
-    _tokenizer = data["tokenizer"]
-    if _model is None:
-        with mo.status.spinner("Loading GPT-2..."):
-            _model = AutoModelForCausalLM.from_pretrained(
-                "gpt2", attn_implementation="eager"
-            )
-            _tokenizer = AutoTokenizer.from_pretrained("gpt2")
-            _model.eval()
-            data["model"] = _model
-            data["tokenizer"] = _tokenizer
+    _model, _tokenizer = gpt2_loader.get()
 
     with mo.status.spinner("Computing attention..."):
         _inputs = _tokenizer(
@@ -1947,6 +1958,18 @@ on every surface.** That's why position 0 becomes the dump target.
 
 Better models have *more* idle heads. More specialization → more idle
 time → busier garbage bin.
+
+**Why pre-norm specifically:**
+[Ran-Milo (2026)](https://alphaxiv.org/abs/2603.11487) proved this is
+architectural, not learned. In pre-norm transformers, LayerNorm before
+each attention layer constrains the residual stream — the running total
+of representations that flows through the network. Every head must
+distribute 100% of its attention (softmax sums to 1), so there's no
+"attend to nothing" option. Scattering idle attention randomly injects
+noise into the residual stream at every layer, compounding through depth.
+Concentrating it on a single predictable position produces a stable,
+low-variance output that LayerNorm can absorb cleanly. The sink isn't a
+bug — it's the cheapest way to satisfy a mathematical constraint.
 """),
             mo.md("### Cross-Model Validation"),
             _fig_cross,
