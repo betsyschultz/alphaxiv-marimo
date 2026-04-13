@@ -70,7 +70,7 @@ def executive_summary(data, mo, np, plt):
     _ax.set_xticks(_x)
     _ax.set_xticklabels(_approaches, fontsize=8)
     _ax.set_ylabel("Attention waste on position 0 (%)", fontsize=11)
-    _ax.set_title("Sink Waste: 8 Attempts to Remove It", fontsize=14, fontweight="bold")
+    _ax.set_title("Sink Waste: 7 Attempts to Remove It", fontsize=14, fontweight="bold")
     _ax.set_ylim(0, 65)
     _ax.grid(True, alpha=0.15, axis="y")
     _ax.axhline(y=44.3, color="#e74c3c", linestyle="--", alpha=0.3, linewidth=1)
@@ -93,10 +93,12 @@ GPT-2 wastes over **44% of its attention** staring at the first word —
 regardless of what that word is. Every attention head must point somewhere,
 so idle heads dump on position 0. That's an attention sink: a garbage bin.
 
-I tested 8 ways to remove sinks — training with alignment pressure (λ = how
-hard the cleanup is pushed), redistribution, architectural tweaks — across
-GPT-2, LLaMA-3.2-1B, and Pythia-70M. **All 8 failed.** Then I changed the
-question: instead of removing the garbage bin, I built a better one.
+I tested every approach I could find to remove sinks — architectural tweaks,
+redistribution, training with alignment pressure (λ = how hard the cleanup
+is pushed) — across GPT-2, LLaMA-3.2-1B, and Pythia-70M. **None eliminated
+them.** The sink token came closest, redirecting garbage to a dedicated
+position — which changed the question: instead of removing the garbage bin,
+can you build a better one?
 **My extension:** 4 learned embeddings (model frozen) that improve perplexity
 **19.7%** on GPT-2 and **26.7%** on LLaMA. The same tokens at the *end* of
 the sequence do nothing (0.0% improvement), proving this is about the garbage
@@ -2045,9 +2047,9 @@ transformers already do this.
 distributing 100%, they wouldn't need a bin. MoE models already route
 to "no expert" — same principle for attention.
 
-**3. Let heads share.** [Interleaved Head Attention](https://alphaxiv.org/abs/2602.21371)
-([Duvvuri et al., 2026](https://alphaxiv.org/abs/2602.21371)) lets heads
-borrow signal from neighbors instead of idling.
+**3. Let heads share.** [Duvvuri et al. (2026)](https://alphaxiv.org/abs/2602.21371)
+introduced Interleaved Head Attention, which lets heads borrow signal from
+neighbors instead of idling.
 """),
             mo.md("""
 ---
