@@ -13,7 +13,7 @@
 import marimo
 
 __generated_with = "0.23.0"
-app = marimo.App(width="full")
+app = marimo.App(width="medium")
 
 
 # ============================================================================
@@ -96,19 +96,13 @@ concept introduced by [Xiao et al.](https://alphaxiv.org/abs/2309.17453)
 (StreamingLLM, 2023), I test whether sinks can be removed, retrained, or
 improved.*
 
-Language models decide what each word means by looking at the words around
-it. But GPT-2 wastes over **44% of that attention** staring at the first
-word — regardless of what the first word is. That's an attention sink.
+GPT-2 wastes over **44% of its attention** staring at the first word —
+regardless of what that word is. Every attention head must point somewhere,
+so idle heads dump on position 0. That's an attention sink: a garbage bin.
 
-Think of each attention head as a worker on an assembly line. Some workers
-have a job for every sentence (grammar, pronouns). Others are idle — there's
-no grammar to check in a string of adjectives. But every worker *must* point
-somewhere. So idle workers dump their attention on the first word, turning
-it into a **garbage bin**.
-
-I tested 8 ways to fix this. None worked — the model *needs* the garbage
-bin. But I found that training a better one (768 numbers, 2 minutes)
-**makes GPT-2 19.7% better** (perplexity 44.5 → 35.7) **and LLaMA-3.2-1B 26.7% better** (16.95 → 12.43) **at predicting language.** Same tokens placed at the end? 0% improvement on both
+I tested 8 ways to fix this. None worked — the model *needs* the bin.
+But training a better one (768 parameters, 2 minutes)
+**makes GPT-2 19.7% better** (perplexity 44.5 → 35.7; lower is better) **and LLaMA-3.2-1B 26.7% better** (16.95 → 12.43) **at predicting language.** Same tokens placed at the end? 0% improvement on both
 models. The effect is entirely about the garbage bin position.
 """),
             _fig_bar,
@@ -1271,15 +1265,10 @@ It chose not to.
             ),
             _fig,
             mo.md(f"""
-The top-left shows the model learning (loss dropping). The top-right shows
-the cleanup incentive barely moving. The bottom row is the punchline:
-garbage stays put no matter how much the model learns.
-
 ### What if I pushed harder?
 
-The first experiment used a gentle cleanup incentive (10% of the training
-signal). Maybe that wasn't enough. So I tried four different strengths,
-each repeated three times with different random starting points:
+I swept the cleanup weight across four strengths, each repeated with
+three random seeds:
 
 | λ_align | Sink waste (mean ± std) | PPL after | Sick heads |
 |---------|------------------------|-----------|------------|
@@ -1293,31 +1282,21 @@ GPT-2 weights, measured at the start of each run — slightly different from
 the notebook's main baseline due to different evaluation points). Standard
 deviations across seeds are ±0.2-0.4%.*
 
-Two patterns. At gentle-to-moderate pressure, sinks actually *increase*
-as the model improves — more specialized workers means more idle time, which
-means more garbage. At 10× pressure, the model finally budges — trading
-language quality for a tiny sink reduction. But sinks still sit at **45.3%**.
-Even when the entire training signal screams "stop doing this," the model
-barely flinches.
+At gentle pressure, sinks *increase* — better language modeling means more
+specialized heads, more idle time, more garbage. At 10× pressure the model
+barely budges: sinks still **45.3%**, and language quality degrades.
 
 {_recursive_md}
 
-Sinks don't cost extra compute — the model does the same amount of math
-either way. And more sinks didn't hurt quality — perplexity *improved*.
-A better model has more specialized workers, more idle time, and more need
-for a garbage bin. The bin gets busier as the model gets smarter.
-
-This empirically confirms the central claim of
-[Ran-Milo (2026)](https://alphaxiv.org/abs/2603.11487) — the primary paper
-this notebook investigates — that pre-norm transformers mathematically
-require sinks for representational stability.
+This empirically confirms
+[Ran-Milo (2026)](https://alphaxiv.org/abs/2603.11487): pre-norm
+transformers mathematically require sinks for representational stability.
 
 ### The one thing that worked: a better garbage bin
 
-The model is using a real word as its dump target. What happens
-when you give it a *purpose-built* one? I trained a single embedding
-vector (768 parameters, model frozen). I tested three interventions to
-separate the sink effect from generic prompt tuning.
+If the model insists on a dump target, give it a purpose-built one.
+I trained a single embedding vector (768 parameters, model frozen) and
+tested three interventions to separate sinks from generic prompt tuning.
 """),
             mo.hstack([
                 mo.stat(value="-19.7%", label="GPT-2 improvement", bordered=True),
@@ -1810,21 +1789,16 @@ def the_insight(data, mo, np, plt):
             mo.md(f"""
 ## Why Every Transformer Has a Garbage Bin
 
-Every attention head must distribute exactly 100% of its attention across
-all the words. There's no way to say "I have nothing useful to look at."
+Every head must distribute 100% of its attention — there's no way to say
+"nothing useful here." When the grammar head hits a string of adjectives,
+it's idle but still forced to point somewhere.
 
-GPT-2 has 12 heads per layer, each with a job — grammar, pronouns, topics.
-But most jobs don't apply to every sentence. When the grammar head hits a
-string of adjectives, it's idle. The math still demands it point somewhere.
-
-Two choices: spread attention thinly across every word (adding a little
-noise to everything), or dump it all on one predictable word (concentrating
-the noise). **Concentrated garbage in one bin beats a thin layer of garbage
+Two choices: spread noise thinly across every word, or concentrate it on
+one predictable word. **Concentrated garbage in one bin beats a thin layer
 on every surface.** That's why position 0 becomes the dump target.
 
-Better models have *more* idle heads, not fewer. More specialization means
-more workers sitting idle in any given context. The garbage bin gets busier
-as the model gets smarter.
+Better models have *more* idle heads. More specialization → more idle
+time → busier garbage bin.
 """),
             mo.md("### Cross-Model Validation"),
             _fig_cross,
@@ -1843,6 +1817,11 @@ layers — sinks *more* than GPT-2. Depth matters more than position
 encoding.
 
 The garbage bin is universal. Deeper models use it more.
+
+*Validated on GPT-2, Pythia-70M, and LLaMA-3.2-1B — all pre-norm architectures.
+Post-norm models (PaLM, early BERT) may differ; theory predicts reduced sinks
+but this is untested. Learned sink tokens were trained on WikiText-2; domain
+transfer magnitude may vary.*
 """),
             mo.accordion({
                 "Open questions": mo.md("""
@@ -1874,68 +1853,39 @@ from scratch produce healthier attention than retrofitting a sink token?
             mo.md("""
 ### What would fix this at the architecture level
 
-The learned tokens are a retrofit. Three approaches could solve it
-from the ground up:
+**1. Built-in bins** ([Darcet et al., 2024](https://alphaxiv.org/abs/2309.16588)).
+Add "register" tokens during training instead of retrofitting. Vision
+transformers already do this.
 
-**1. Built-in garbage bins** ([Darcet et al., 2024](https://alphaxiv.org/abs/2309.16588)).
-Instead of retrofitting tokens after training, add "register" tokens
-during training. The model learns how many bins it needs. Vision
-transformers already do this. Language models should too.
+**2. Let heads say "nothing."** If heads could output zero instead of
+distributing 100%, they wouldn't need a bin. MoE models already route
+to "no expert" — same principle for attention.
 
-**2. Let heads say "nothing."** Right now, every head must distribute
-100% of its attention somewhere. If heads could output zero — a native
-"I have nothing useful to do" signal — they wouldn't need a garbage
-bin at all. Mixture-of-Experts models already route to "no expert."
-The same principle for attention heads.
-
-**3. Let heads share.** Interleaved Head Attention (Meta et al., 2026)
-lets heads borrow useful signal from neighbors instead of idling.
-Fewer idle heads = less garbage = less need for a bin.
+**3. Let heads share.** Interleaved Head Attention (Meta, 2026) lets
+heads borrow signal from neighbors instead of idling.
 """),
             mo.md("""
 ---
 
 ## What You Can Do Today
 
-These aren't theoretical suggestions — they come directly from the
-experiments in this notebook.
+**1. Prepend learned tokens.** Train 4 embeddings at position 0 (model
+frozen). GPT-2: -19.7% perplexity. LLaMA-1B: -26.7%. Same tokens at
+the end: 0.0%. ~10 minutes of training, free at inference.
 
-**1. Prepend learned tokens for free improvement.**
-Train 4 embeddings at position 0, freeze the model. On GPT-2: -19.7%
-perplexity. On LLaMA-3.2-1B: -26.7%. Takes ~10 minutes of training,
-costs nothing at inference. Position matters — the same tokens at the
-end do 0.0%.
-
-**2. Never evict position 0 from your KV cache.**
-When compressing the key-value cache for long-context serving, keep
-the first token. It's the most-attended position in the model — losing
-it degrades every downstream prediction
+**2. Never evict position 0 from your KV cache.** It's the most-attended
+position — losing it degrades every downstream prediction
 ([Zweiger et al.](https://alphaxiv.org/abs/2602.16284)).
 
-**3. Filter out the garbage before reading attention maps.**
-If you're interpreting attention patterns to understand what the model
-is doing, ignore position 0. Over 44-66% of attention weight is
-structural parking, not meaningful signal.
+**3. Filter position 0 from attention maps.** 44-66% of attention weight
+is structural parking, not meaningful signal.
 
-**4. Don't try to train sinks away.**
-I tested alignment losses at 4 weights × 3 seeds. The model improves
-at language but refuses to change its attention. Even at λ=10 (10× the
-weight on alignment vs language modeling), sinks hold. Don't waste
-compute on this.
+**4. Don't train sinks away.** 4 weights × 3 seeds. Even at λ=10, sinks
+hold at 45%. The compute is wasted.
 
-**5. Prune sink heads first, not last.**
-When removing heads for efficiency, start with sink-dominated heads.
-They're 29× less critical than random heads. The high-entropy "noisy"
-heads in layers 0-1 and the final layer are the ones you can't afford
-to lose.
-
-**Limitation:** Validated on GPT-2, Pythia-70M, and LLaMA-3.2-1B (all
-pre-norm). Post-norm architectures (PaLM, early BERT) may show different
-patterns — theory predicts reduced sinks, but this remains an open question.
-Learned sink tokens were trained on WikiText-2 — domain transfer to
-specialized text (code, medical, conversational) is untested. The
-improvement likely holds (sinks are architectural, not domain-specific)
-but the magnitude may vary.
+**5. Prune sink heads first.** They're 29× less critical than random heads.
+The high-entropy heads in layers 0-1 and the final layer are the ones
+you can't lose.
 
 ---
 """),
