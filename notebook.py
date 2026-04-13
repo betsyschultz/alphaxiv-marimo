@@ -52,8 +52,8 @@ def executive_summary(data, mo, np, plt):
     ]
     _labels = [
         "44.3%", "44.1%\nno change", "19.4%\nredistributed",
-        "0.9%\nredirected", "46.2%\nresisted", "47.8%\nequal pressure\nworse",
-        "45.3%\n100× pressure\nstill 45%", "45.5%\nworse",
+        "0.9%\nredirected", "46.2%\nresisted", "47.8%\nworse",
+        "45.3%\n100× pressure", "45.5%\nworse",
     ]
 
     _fig_bar, _ax = plt.subplots(figsize=(12, 4.5))
@@ -69,7 +69,7 @@ def executive_summary(data, mo, np, plt):
         )
     _ax.set_xticks(_x)
     _ax.set_xticklabels(_approaches, fontsize=8)
-    _ax.set_ylabel("Attention waste on position 0 (%)", fontsize=11)
+    _ax.set_ylabel("Attention waste on first content token (%)", fontsize=11)
     _ax.set_title("Sink Waste: 7 Attempts to Remove It", fontsize=14, fontweight="bold")
     _ax.set_ylim(0, 65)
     _ax.grid(True, alpha=0.15, axis="y")
@@ -772,7 +772,7 @@ def fix_comparison(data, mo, np, plt, fix_radio, temp_slider, fix_layer, fix_hea
         markersize=14, markeredgecolor="black", markeredgewidth=2, zorder=5,
     )
     _axes[1].set_xlabel("Layer", fontsize=11)
-    _axes[1].set_ylabel("Mean attn to position 0", fontsize=11)
+    _axes[1].set_ylabel("Mean attn to first content token", fontsize=11)
     _axes[1].set_title("Sink Magnitude by Fix", fontsize=11, fontweight="bold")
     _axes[1].legend(fontsize=9)
     _axes[1].grid(True, alpha=0.2)
@@ -849,8 +849,8 @@ ReLU attention replaces softmax with ReLU, so attention no longer sums to
 production length (175 tokens), sinks *increase* to
 **{_relu_sink_175:.1f}%** — worse than standard.
 
-This failure mode is known
-(ReLU attention is known to require sequence-length-dependent scaling). I'm quantifying it in terms of sink
+This is consistent with known ReLU attention scaling issues — without
+softmax normalization, raw magnitudes grow with sequence length. I'm quantifying it in terms of sink
 magnitude: the same model, same weights, same text — ReLU makes the sink
 problem worse at realistic sequence lengths.
 """),
@@ -1273,9 +1273,9 @@ pushes sick heads to spread their attention more like healthy ones.
 {_blend["total_steps"]} training steps.
 
 The model got **{_ppl_drop:.0f}% better at language** (perplexity
-{_ppl_before} → {_ppl_after}). But it **refused to change its attention
-patterns.** The garbage stayed exactly where it was — meaning the model
-found ways to improve *around* the sinks rather than removing them.
+{_ppl_before} → {_ppl_after}). But its **attention patterns didn't
+change.** The garbage stayed exactly where it was — the model
+improved *around* the sinks rather than removing them.
 They're not waste. They're infrastructure.
 """),
             mo.callout(
@@ -1310,9 +1310,9 @@ but attention patterns remained stable.
 | Sink waste | {_waste_before}% | {_waste_after}% | +{_waste_after - _waste_before:.2f}pp |
 | Sick heads | {_sick_before}/144 | {_sick_after}/144 | +{_sick_after - _sick_before} |
 
-The garbage is load-bearing. The model had every opportunity to
-clean up its attention. The training explicitly rewarded it.
-It chose not to.
+The garbage is load-bearing. The model had every opportunity and
+explicit gradient signal to clean up its attention — the loss
+landscape has no viable path around the constraint.
 """),
                 kind="warn",
             ),
@@ -1588,16 +1588,16 @@ def adaptive_controls(mo):
     )
 
     mo.output.replace(
-        mo.vstack([
-            mo.md("""
-## What If You Force Sick Heads to Spread Out?
-
+        mo.accordion({
+            "Bonus: What if you force sick heads to spread out?": mo.vstack([
+                mo.md("""
 For each sick head, I soften its attention proportional to how sick it is.
 Healthy heads stay untouched. Drag the slider to watch sick heads (red)
 turn healthy (blue) — then see whether the model actually changes its output.
 """),
-            mo.callout(adapt_strength, kind="info"),
-        ])
+                mo.callout(adapt_strength, kind="info"),
+            ]),
+        })
     )
     return (adapt_strength,)
 
@@ -1689,14 +1689,16 @@ top-1 predictions agree {_top1:.0f}% of the time. Perplexity: {_std_ppl:.1f} →
         ]
 
     mo.output.replace(
-        mo.vstack([
-            _fig,
-            mo.md(f"""
+        mo.accordion({
+            f"Results: {_n_sick_before} → {_n_sick_after} sick heads, {_sink_before:.1f}% → {_sink_after:.1f}% waste": mo.vstack([
+                _fig,
+                mo.md(f"""
 **Sick heads:** {_n_sick_before} → {_n_sick_after} ({_healed} healed) ·
 **Sink waste:** {_sink_before:.1f}% → {_sink_after:.1f}%
 """),
-            *_val_elements,
-        ])
+                *_val_elements,
+            ]),
+        })
     )
 
 
@@ -1965,7 +1967,8 @@ one predictable word. **Concentrated garbage in one bin beats a thin layer
 on every surface.** That's why position 0 becomes the dump target.
 
 Better models have *more* idle heads. More specialization → more idle
-time → busier garbage bin.
+time → busier garbage bin
+([Sun et al., 2026](https://alphaxiv.org/abs/2603.05498)).
 
 **Why pre-norm specifically:**
 [Ran-Milo (2026)](https://alphaxiv.org/abs/2603.11487) proved this is
@@ -1986,7 +1989,7 @@ bug — it's the cheapest way to satisfy a mathematical constraint.
 |---|---|---|---|
 | **Parameters** | 124M | 70M | 1.2B |
 | **Layers × Heads** | 12 × 12 | 6 × 8 | 16 × 32 |
-| **Position encoding** | Absolute | Rotary | Rotary |
+| **Position encoding** | Absolute | Rotary ([Su et al., 2021](https://alphaxiv.org/abs/2104.09864)) | Rotary |
 | **Sink waste** | 44.3% | **3.3%** | **65.6%** |
 | **Sick heads** | 21.5% | **45.8%** | 33.0% |
 | **Pattern** | Deep sink | Low sink, high sick | Deepest sink |
