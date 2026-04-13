@@ -104,18 +104,6 @@ models. The effect is entirely about the garbage bin position.
                 mo.stat(value="29×", label="less critical than random heads", bordered=True),
                 mo.stat(value="8,192", label="numbers trained (of 1.2 billion)", bordered=True),
             ], justify="center", gap=1),
-            mo.accordion({
-                "Methodology note": mo.md("""
-Training used λ_align = 0.1 (alignment loss weighted at 10% of
-language modeling loss) over 1,767 steps (~1 epoch of WikiText-2 at
-batch size 4). λ=0.1 was chosen as a conservative starting point —
-high enough to provide gradient signal without destroying language
-ability. I then swept λ across 0.1, 0.5, 1.0, and 10.0 (results in
-the λ sweep table below). The alignment loss barely moved (0.35 → 0.33)
-while LM loss dropped steadily, confirming the model *could* learn
-but attention patterns remained stable.
-"""),
-            }),
         ])
     )
 
@@ -875,11 +863,11 @@ problem worse at realistic sequence lengths.
 # CELL 6: ENTROPY CONTROLS (show code)
 
 @app.cell
-def entropy_controls(mo, temp_slider):
+def entropy_controls(mo):
     entropy_radio = mo.ui.radio(
         options=[
             "Standard (baseline)",
-            f"Temperature T={temp_slider.value:.1f}",
+            "Temperature scaling",
             "Sink Token",
         ],
         value="Standard (baseline)",
@@ -928,7 +916,7 @@ def entropy_dashboard(
 
     _cond_keys = {
         "Standard (baseline)": "standard",
-        f"Temperature T={temp_slider.value:.1f}": "temp",
+        "Temperature scaling": "temp",
         "Sink Token": "sink",
     }
     _cond = _cond_keys.get(entropy_radio.value, "standard")
@@ -1226,6 +1214,18 @@ sinks rather than through them.
                 kind="neutral",
             ),
             _training_code,
+            mo.accordion({
+                "Methodology note": mo.md(f"""
+Training used λ_align = 0.1 (alignment loss weighted at 10% of
+language modeling loss) over {_blend["total_steps"]} steps (~1 epoch of WikiText-2 at
+batch size 4). λ=0.1 was chosen as a conservative starting point —
+high enough to provide gradient signal without destroying language
+ability. I then swept λ across 0.1, 0.5, 1.0, and 10.0 (results in
+the λ sweep table below). The alignment loss barely moved (0.35 → 0.33)
+while LM loss dropped steadily, confirming the model *could* learn
+but attention patterns remained stable.
+"""),
+            }),
             mo.callout(
                 mo.md(f"""
 **The model got better at language. Its attention didn't change.**
@@ -1264,6 +1264,8 @@ deviations across seeds are ±0.2-0.4%.*
 At gentle pressure, sinks *increase* — better language modeling means more
 specialized heads, more idle time, more garbage. At 10× pressure the model
 barely budges: sinks still **45.3%**, and language quality degrades.
+
+So gradient-based training can't remove sinks. What about iterating?
 
 {_recursive_md}
 
@@ -1893,14 +1895,21 @@ Three architectures, three different sink profiles:
 - **Pythia-70M** (70M, 6 layers, rotary embeddings): 3% sink waste — but half its heads are "sick"
 - **LLaMA-3.2-1B** (1.2B, 16 layers, rotary embeddings): **65.6% sink waste** — the highest of all three
 
-Pythia-70M is the outlier. Its final two layers have every head at zero
-entropy — maximally focused, but not on position 0. With only 6 layers,
-the sink pattern doesn't develop. But LLaMA — also using
-rotary embeddings ([Su et al., 2021](https://alphaxiv.org/abs/2104.09864)), but with 16
-layers — sinks *more* than GPT-2. Depth matters more than position
-encoding.
+Pythia-70M is the outlier — and the most revealing. It has the *lowest*
+sink waste (3.3%) but the *highest* proportion of sick heads (45.8%).
+Its final two layers have every head at zero entropy — maximally
+focused, but not on position 0. With only 6 layers, heads haven't
+specialized enough to need a parking spot. They're all busy, but busy
+doing narrow work — hence "sick" by our entropy metric without being
+sink-dominated. This separates two phenomena that look identical in
+deeper models: **low entropy from useful specialization** vs. **low
+entropy from garbage dumping.**
 
-The garbage bin is universal. Deeper models use it more.
+LLaMA — also using rotary embeddings
+([Su et al., 2021](https://alphaxiv.org/abs/2104.09864)), but with 16
+layers — sinks *more* than GPT-2 (65.6% vs 44.3%). Same embedding
+trick, 2.7× more depth, 50% more sink waste. Depth drives sinks, not
+position encoding.
 
 *Validated on GPT-2, Pythia-70M, and LLaMA-3.2-1B — all pre-norm architectures.
 Post-norm models (PaLM, early BERT) may differ; theory predicts reduced sinks
