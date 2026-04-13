@@ -16,9 +16,7 @@ __generated_with = "0.23.0"
 app = marimo.App(width="medium")
 
 
-# ============================================================================
 # SIDEBAR: TABLE OF CONTENTS
-# ============================================================================
 
 @app.cell(hide_code=True)
 def table_of_contents():
@@ -26,9 +24,7 @@ def table_of_contents():
     _mo.sidebar([_mo.outline()])
 
 
-# ============================================================================
 # TITLE (renders immediately, no data dependency)
-# ============================================================================
 
 @app.cell(hide_code=True)
 def title():
@@ -41,9 +37,7 @@ def title():
     )
 
 
-# ============================================================================
 # EXECUTIVE SUMMARY
-# ============================================================================
 
 @app.cell(hide_code=True)
 def executive_summary(data, mo, np, plt):
@@ -126,9 +120,7 @@ but attention patterns remained stable.
     )
 
 
-# ============================================================================
 # CELL 0: PRECOMPUTATION
-# ============================================================================
 
 @app.cell
 def precompute():
@@ -440,6 +432,8 @@ def precompute():
         "raw_scores_all": _raw_scores_all,
         "sink_attn_full": _sink_attn_full,
         "temp_attn_fn": _temp_attn,
+        "entropy_fn": _entropy,
+        "base_dir": os.path.dirname(os.path.abspath(__file__)),
         "entropy_standard": _entropy(_standard_attn),
         "entropy_esa": _entropy(_esa_attn),
         "entropy_sink": _entropy(_sink_attn_full),
@@ -510,9 +504,7 @@ sink_ids = torch.cat([torch.zeros(1, 1, dtype=torch.long), inputs["input_ids"]],
     return data, mo, np, plt
 
 
-# ============================================================================
 # CELL 1: THE HOOK (controls)
-# ============================================================================
 
 @app.cell
 def hook_controls(data, mo):
@@ -540,9 +532,7 @@ of attention goes to one meaningless token. Drag the slider to watch it form.
     return (hook_layer,)
 
 
-# ============================================================================
 # CELL 1B: THE HOOK (viz)
-# ============================================================================
 
 @app.cell(hide_code=True)
 def hook_viz(data, mo, np, plt, hook_layer):
@@ -646,9 +636,7 @@ def hook_viz(data, mo, np, plt, hook_layer):
     )
 
 
-# ============================================================================
 # CELL 3: FIX CONTROLS (show code)
-# ============================================================================
 
 @app.cell
 def fix_controls(mo):
@@ -714,9 +702,7 @@ keeping the sink token in the KV cache lets models process unlimited-length text
     return fix_radio, temp_slider, fix_layer, fix_head
 
 
-# ============================================================================
 # CELL 5: FIX COMPARISON
-# ============================================================================
 
 @app.cell(hide_code=True)
 def fix_comparison(data, mo, np, plt, fix_radio, temp_slider, fix_layer, fix_head):
@@ -886,9 +872,7 @@ problem worse at realistic sequence lengths.
     return temp_attn,
 
 
-# ============================================================================
 # CELL 6: ENTROPY CONTROLS (show code)
-# ============================================================================
 
 @app.cell
 def entropy_controls(mo, temp_slider):
@@ -934,9 +918,7 @@ show the garbage stripe, and that the count stays stable if I adjust the thresho
     return entropy_radio, dash_layer, dash_head
 
 
-# ============================================================================
 # CELL 7: ENTROPY DASHBOARD
-# ============================================================================
 
 @app.cell(hide_code=True)
 def entropy_dashboard(
@@ -951,8 +933,7 @@ def entropy_dashboard(
     }
     _cond = _cond_keys.get(entropy_radio.value, "standard")
 
-    _p = np.clip(temp_attn, 1e-9, 1.0)
-    _entropy_temp = -(_p * np.log(_p)).sum(axis=-1).mean(axis=-1)
+    _entropy_temp = data["entropy_fn"](temp_attn)
 
     _ent_map = {
         "standard": data["entropy_standard"],
@@ -1066,17 +1047,13 @@ syntax heads, coreference heads. The truly sick ones have low entropy
     )
 
 
-# ============================================================================
 # CELL 8: THE TRAINING EXPERIMENTS
-# ============================================================================
 
 @app.cell
 def training_experiments(data, mo, np, plt):
     import json as _json
     import os as _os
-
-    # --- Load training results (with hardcoded fallback for molab) ---
-    _dir = _os.path.dirname(_os.path.abspath(__file__))
+    _dir = data["base_dir"]
 
     # Static training results
     try:
@@ -1091,23 +1068,16 @@ def training_experiments(data, mo, np, plt):
         _baseline = {"perplexity": 44.46, "sink_waste_pct": 44.26, "num_sick_heads": 31, "healthy": 98, "diffuse": 15}
         _finetuned = {"perplexity": 24.59, "sink_waste_pct": 44.40, "num_sick_heads": 32, "healthy": 97, "diffuse": 15}
         _blend = {"total_steps": 1767, "baseline": _baseline, "finetuned": _finetuned}
-        _log = [
-            {"step": 100, "lm_loss": 3.7736, "align_loss": 0.349, "sink_waste_pct": 40.1, "num_sick_heads": 23},
-            {"step": 200, "lm_loss": 3.4750, "align_loss": 0.347, "sink_waste_pct": 41.8, "num_sick_heads": 25},
-            {"step": 300, "lm_loss": 3.3849, "align_loss": 0.345, "sink_waste_pct": 42.6, "num_sick_heads": 24},
-            {"step": 400, "lm_loss": 3.3445, "align_loss": 0.344, "sink_waste_pct": 43.0, "num_sick_heads": 24},
-            {"step": 500, "lm_loss": 3.3187, "align_loss": 0.343, "sink_waste_pct": 43.4, "num_sick_heads": 24},
-            {"step": 700, "lm_loss": 3.2015, "align_loss": 0.341, "sink_waste_pct": 43.4, "num_sick_heads": 24},
-            {"step": 800, "lm_loss": 3.2024, "align_loss": 0.340, "sink_waste_pct": 43.3, "num_sick_heads": 24},
-            {"step": 900, "lm_loss": 3.2009, "align_loss": 0.339, "sink_waste_pct": 43.4, "num_sick_heads": 24},
-            {"step": 1000, "lm_loss": 3.1891, "align_loss": 0.338, "sink_waste_pct": 43.6, "num_sick_heads": 24},
-            {"step": 1100, "lm_loss": 3.1855, "align_loss": 0.337, "sink_waste_pct": 43.5, "num_sick_heads": 23},
-            {"step": 1300, "lm_loss": 3.1143, "align_loss": 0.335, "sink_waste_pct": 43.5, "num_sick_heads": 24},
-            {"step": 1400, "lm_loss": 3.1137, "align_loss": 0.334, "sink_waste_pct": 43.6, "num_sick_heads": 24},
-            {"step": 1500, "lm_loss": 3.0977, "align_loss": 0.334, "sink_waste_pct": 43.5, "num_sick_heads": 23},
-            {"step": 1600, "lm_loss": 3.1065, "align_loss": 0.333, "sink_waste_pct": 43.6, "num_sick_heads": 23},
-            {"step": 1700, "lm_loss": 3.1108, "align_loss": 0.333, "sink_waste_pct": 43.7, "num_sick_heads": 24},
+        # Compact fallback: [step, lm_loss, align_loss, sink_waste_pct, num_sick_heads]
+        _raw = [
+            [100,3.7736,.349,40.1,23],[200,3.475,.347,41.8,25],[300,3.3849,.345,42.6,24],
+            [400,3.3445,.344,43.0,24],[500,3.3187,.343,43.4,24],[700,3.2015,.341,43.4,24],
+            [800,3.2024,.340,43.3,24],[900,3.2009,.339,43.4,24],[1000,3.1891,.338,43.6,24],
+            [1100,3.1855,.337,43.5,23],[1300,3.1143,.335,43.5,24],[1400,3.1137,.334,43.6,24],
+            [1500,3.0977,.334,43.5,23],[1600,3.1065,.333,43.6,23],[1700,3.1108,.333,43.7,24],
         ]
+        _keys = ["step", "lm_loss", "align_loss", "sink_waste_pct", "num_sick_heads"]
+        _log = [dict(zip(_keys, r)) for r in _raw]
 
     # Filter epoch-boundary outliers
     _log_clean = [s for s in _log if s["lm_loss"] > 1.0]
@@ -1246,6 +1216,15 @@ patterns.** The garbage stayed exactly where it was — meaning the model
 found ways to improve *around* the sinks rather than removing them.
 They're not waste. They're infrastructure.
 """),
+            mo.callout(
+                mo.md("""
+**TL;DR of the four charts below:** Language loss drops steadily (the model
+is learning). Alignment loss barely moves (sinks resist). Sink waste stays
+flat at ~44%. Sick head count holds at ~24. The model improved *around* the
+sinks rather than through them.
+"""),
+                kind="neutral",
+            ),
             _training_code,
             mo.callout(
                 mo.md(f"""
@@ -1337,6 +1316,9 @@ collects.
 Sinks didn't decrease — they stayed at ~41%. But the model got better at
 language because its first real token is no longer corrupted. The OFF switch
 isn't broken. It just works better when it's purpose-built.
+
+*All perplexity numbers evaluated on the WikiText-2 validation split
+(separate from training data). Training used the WikiText-2 train split.*
 """),
             mo.accordion({
                 "Training code: learned sink embedding": mo.md("""
@@ -1361,16 +1343,13 @@ for batch in dataloader:
     )
 
 
-# ============================================================================
 # CELL 9: ABLATION CENTERPIECE
-# ============================================================================
 
 @app.cell(hide_code=True)
 def ablation_centerpiece(data, mo, np, plt):
     import json as _json
     import os as _os
-
-    _dir = _os.path.dirname(_os.path.abspath(__file__))
+    _dir = data["base_dir"]
 
     # Load ablation results
     try:
@@ -1500,7 +1479,7 @@ not just at n=30, but everywhere along the curve.
 If the garbage bin is just a parking spot, what happens when you remove it?
 I shut off {_n_sink} garbage-bin heads completely, then did the same to
 {_n_sink} random working heads and {_n_diffuse} high-performing heads for
-comparison. (Perplexity = how surprised the model is — lower is better.)
+comparison.
 """),
             _fig_abl,
             mo.hstack([
@@ -1534,9 +1513,7 @@ for just {_n_diffuse} heads) are the *most* important per-head. All in layers 0-
     )
 
 
-# ============================================================================
 # CELL 10: ADAPTIVE FIX CONTROLS
-# ============================================================================
 
 @app.cell
 def adaptive_controls(mo):
@@ -1555,6 +1532,10 @@ instead of just staring at the garbage bin? For each sick head, I soften
 its attention in proportion to how sick it is. Healthy heads stay untouched.
 
 Drag the slider. Watch sick heads (red) turn healthy (blue) in real time.
+
+*Treatment strength = how aggressively we force sick heads to pay attention
+to more words instead of staring at the garbage bin. 0 = no intervention,
+2 = maximum spread.*
 """),
             mo.callout(adapt_strength, kind="info"),
         ])
@@ -1562,9 +1543,7 @@ Drag the slider. Watch sick heads (red) turn healthy (blue) in real time.
     return (adapt_strength,)
 
 
-# ============================================================================
 # CELL 11: ADAPTIVE FIX VISUALIZATION
-# ============================================================================
 
 @app.cell(hide_code=True)
 def adaptive_viz(data, mo, np, plt, adapt_strength):
@@ -1593,9 +1572,7 @@ def adaptive_viz(data, mo, np, plt, adapt_strength):
     _exp = np.exp(_fixed - _fixed.max(axis=-1, keepdims=True))
     _fixed_attn = _exp / _exp.sum(axis=-1, keepdims=True)
 
-    # --- Entropy of fixed attention ---
-    _p = np.clip(_fixed_attn, 1e-9, 1.0)
-    _ent_fixed = -(_p * np.log(_p)).sum(axis=-1).mean(axis=-1)
+    _ent_fixed = data["entropy_fn"](_fixed_attn)
 
     # --- Stats ---
     _n_sick_before = int(_sick.sum())
@@ -1640,9 +1617,7 @@ def adaptive_viz(data, mo, np, plt, adapt_strength):
     )
 
 
-# ============================================================================
 # CELL 11B: ADAPTIVE FIX VALIDATION (runs once, no slider dependency)
-# ============================================================================
 
 @app.cell(hide_code=True)
 def adaptive_validation(data, mo, np):
@@ -1680,9 +1655,116 @@ top-1 predictions agree {_top1:.0f}% of the time. Perplexity: {_std_ppl:.1f} →
         )
 
 
-# ============================================================================
+# CELL 11C: TRY IT YOURSELF (controls)
+
+@app.cell
+def try_controls(mo):
+    custom_text = mo.ui.text_area(
+        value="",
+        placeholder="Paste any text here to see its attention sink pattern...",
+        label="Your text (max 500 characters)",
+        max_length=500,
+        full_width=True,
+    )
+
+    mo.output.replace(
+        mo.vstack([
+            mo.md("""
+## Try It Yourself
+
+Paste any text and see where GPT-2's attention goes. Does the sink
+still dominate? Try different content — code, poetry, a grocery list.
+The garbage bin doesn't care what you write.
+"""),
+            custom_text,
+        ])
+    )
+    return (custom_text,)
+
+
+# CELL 11D: TRY IT YOURSELF (viz)
+
+@app.cell(hide_code=True)
+def try_viz(data, mo, np, plt, custom_text):
+    _text = custom_text.value.strip()
+    if not _text:
+        mo.output.replace(
+            mo.callout(
+                mo.md("*Type or paste text above to analyze its attention pattern.*"),
+                kind="neutral",
+            )
+        )
+        return
+
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    _model = data["model"]
+    _tokenizer = data["tokenizer"]
+    if _model is None:
+        with mo.status.spinner("Loading GPT-2..."):
+            _model = AutoModelForCausalLM.from_pretrained(
+                "gpt2", attn_implementation="eager"
+            )
+            _tokenizer = AutoTokenizer.from_pretrained("gpt2")
+            _model.eval()
+
+    with mo.status.spinner("Computing attention..."):
+        _inputs = _tokenizer(
+            _text[:500], return_tensors="pt", truncation=True, max_length=512,
+        )
+        _seq = _inputs["input_ids"].shape[1]
+        _toks = [_tokenizer.decode(t) for t in _inputs["input_ids"][0]]
+
+        with torch.no_grad():
+            _out = _model(**_inputs, output_attentions=True)
+
+        _attn = np.stack([l[0].numpy() for l in _out.attentions])
+        _n_layers = _attn.shape[0]
+        _sink_per_layer = _attn[:, :, :, 0].mean(axis=(1, 2)) * 100
+        _overall_sink = _sink_per_layer.mean()
+
+    _deep = _attn[-1].mean(axis=0)
+    _fig, _axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    _axes[0].imshow(_deep, cmap="viridis", aspect="auto")
+    _axes[0].set_title(
+        f"Layer {_n_layers - 1} — {_sink_per_layer[-1]:.1f}% to position 0",
+        fontweight="bold",
+    )
+    _axes[0].set_xlabel("Key position")
+    _axes[0].set_ylabel("Query position")
+    plt.colorbar(_axes[0].images[0], ax=_axes[0], shrink=0.8, label="Attention weight")
+
+    _axes[1].plot(
+        range(_n_layers), _sink_per_layer, "o-",
+        color="#e74c3c", linewidth=2,
+    )
+    _axes[1].set_xlabel("Layer")
+    _axes[1].set_ylabel("Attention to position 0 (%)")
+    _axes[1].set_title("Sink Magnitude by Layer", fontweight="bold")
+    _axes[1].set_ylim(bottom=0)
+    _axes[1].grid(True, alpha=0.2)
+    plt.tight_layout()
+
+    _first_tok = _toks[0].strip() or "(space)"
+    _status = "dominant" if _overall_sink > 30 else "moderate" if _overall_sink > 15 else "mild"
+    mo.output.replace(
+        mo.vstack([
+            _fig,
+            mo.callout(
+                mo.md(
+                    f"**Your text:** {_seq} tokens · **{_overall_sink:.1f}%** average "
+                    f"attention to position 0 · First token: *{_first_tok}* · "
+                    f"Status: **{_status}**"
+                ),
+                kind="danger" if _status == "dominant" else "warn" if _status == "moderate" else "success",
+            ),
+        ])
+    )
+
+
 # CELL 12: THE INSIGHT — WHY SINKS EXIST
-# ============================================================================
 
 @app.cell(hide_code=True)
 def the_insight(data, mo, np, plt):
@@ -1695,7 +1777,7 @@ def the_insight(data, mo, np, plt):
     # --- Cross-model comparison ---
     import json as _json
     import os as _os
-    _dir = _os.path.dirname(_os.path.abspath(__file__))
+    _dir = data["base_dir"]
     _cross_models = []
     try:
         with open(_os.path.join(_dir, "pythia_results.json")) as _f:
@@ -1820,9 +1902,19 @@ The garbage bin is universal. Deeper models use it more.
 
 *Validated on GPT-2, Pythia-70M, and LLaMA-3.2-1B — all pre-norm architectures.
 Post-norm models (PaLM, early BERT) may differ; theory predicts reduced sinks
-but this is untested. Learned sink tokens were trained on WikiText-2; domain
-transfer magnitude may vary.*
+but this is untested.*
 """),
+            mo.callout(
+                mo.md("""
+**Evaluation scope:** All perplexity improvements (GPT-2 -19.7%, LLaMA-1B
+-26.7%) were measured on the WikiText-2 validation split — the same domain
+as training. Performance on out-of-distribution text (code, dialogue,
+non-English) is untested and may differ. The sink *pattern* is universal
+across architectures; the learned sink *improvement magnitude* is
+domain-specific until validated elsewhere.
+"""),
+                kind="warn",
+            ),
             mo.accordion({
                 "Open questions": mo.md("""
 - **Post-norm architectures** — theory predicts reduced sinks in post-norm transformers. Does the pattern hold for
