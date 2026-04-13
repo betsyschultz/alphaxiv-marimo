@@ -1488,11 +1488,11 @@ def ablation_centerpiece(data, mo, np, plt):
         _cumulative_elements = [
             _fig_cum,
             mo.md("""
-**Compare the endpoints.** Remove 30 sink heads and perplexity roughly
-doubles. Remove 30 important heads and it triples. The curves aren't smooth
-— head interactions create spikes when specific combinations break — but the
-overall trajectory is clear: the model tolerates losing its parking lot far
-better than losing its workers.
+**The curves aren't smooth — this is real.** Head interactions mean
+removing specific combinations breaks things. But notice: the green
+curve stays shallower than red at *every* point. The model tolerates
+losing its garbage bins far better than losing its workers — not just
+at n=30, but everywhere along the curve.
 """),
         ]
     except Exception:
