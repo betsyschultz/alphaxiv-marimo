@@ -1239,7 +1239,9 @@ pushes sick heads to spread their attention more like healthy ones.
 
 The model got **{_ppl_drop:.0f}% better at language** (perplexity
 {_ppl_before} → {_ppl_after}). But it **refused to change its attention
-patterns.** The garbage stayed exactly where it was.
+patterns.** The garbage stayed exactly where it was — meaning the model
+found ways to improve *around* the sinks rather than removing them.
+They're not waste. They're infrastructure.
 """),
             _training_code,
             mo.callout(
