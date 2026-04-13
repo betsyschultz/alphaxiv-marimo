@@ -90,13 +90,15 @@ GPT-2 wastes over **44% of its attention** staring at the first word —
 regardless of what that word is. Every attention head must point somewhere,
 so idle heads dump on position 0. That's an attention sink: a garbage bin.
 
-I tested 8 ways to fix this — training, redistribution, architectural
-tweaks — across GPT-2, LLaMA-3.2-1B, and Pythia-70M. Seven failed.
-The eighth revealed something useful: sinks are necessary but the
-*default* sink is suboptimal. A purpose-built one (4 learned embeddings,
-model frozen) improves perplexity **19.7%** on GPT-2 and **26.7%** on
-LLaMA — and the same tokens at the *end* of the sequence do nothing,
-proving this is about the garbage bin, not prompt tuning.
+I tested 8 ways to fix this — training (λ = how hard the cleanup is
+pushed), redistribution, architectural tweaks — across GPT-2,
+LLaMA-3.2-1B, and Pythia-70M. Seven failed. The eighth revealed
+something useful: sinks are necessary but the *default* sink is
+suboptimal. A purpose-built one (4 learned embeddings, model frozen)
+improves perplexity **19.7%** on GPT-2 and **26.7%** on LLaMA — and
+the same tokens at the *end* of the sequence do nothing, proving this
+is about the garbage bin, not prompt tuning. Pythia confirmed it from
+below: too shallow for sinks, but the highest rate of sick heads.
 """),
             _fig_bar,
         ])
@@ -710,7 +712,7 @@ def fix_comparison(data, mo, np, plt, fix_radio, temp_slider, fix_layer, fix_hea
     _label_map = {
         "standard": "Standard",
         "temp": f"Temperature T={temp_slider.value:.1f}",
-        "sink": "Sink Token",
+        "sink": "Sink token",
     }
 
     _attn = _attn_map[_mode_key]
@@ -758,7 +760,7 @@ def fix_comparison(data, mo, np, plt, fix_radio, temp_slider, fix_layer, fix_hea
     )
     _axes[1].plot(
         _lyrs, data["sink_real_first"], "^-",
-        color=data["colors"]["sink"], linewidth=2, label="Sink Token (real 1st)",
+        color=data["colors"]["sink"], linewidth=2, label="Sink token (real 1st)",
     )
     _axes[1].plot(
         _layer, _mag_map[_mode_key][_layer], "o",
@@ -823,11 +825,11 @@ def fix_comparison(data, mo, np, plt, fix_radio, temp_slider, fix_layer, fix_hea
 **Layer {_layer} — attention to first real token:**
 Standard: **{_std_s:.3f}** |
 Temperature T={temp_slider.value:.1f}: **{_temp_s:.3f}** ({(_temp_s / _std_s - 1) * 100:+.0f}%) |
-Sink Token: **{_sink_r:.4f}** ({(_sink_r / _std_s - 1) * 100:+.0f}%)
+Sink token: **{_sink_r:.4f}** ({(_sink_r / _std_s - 1) * 100:+.0f}%)
 
-**Overall waste:** Standard {_std_total:.1f}% | Temp {_temp_total:.1f}% | Sink Token {_sink_total:.1f}%
+**Overall waste:** Standard {_std_total:.1f}% | Temp {_temp_total:.1f}% | Sink token {_sink_total:.1f}%
 {"" if data["sink_ppl_input"] == 0 else f"""
-**Perplexity on input text:** Standard {data['std_ppl_input']} → Sink Token **{data['sink_ppl_input']}**
+**Perplexity on input text:** Standard {data['std_ppl_input']} → Sink token **{data['sink_ppl_input']}**
 ({((data['sink_ppl_input'] - data['std_ppl_input']) / data['std_ppl_input'] * 100):+.1f}%).
 {'The sink token **improves** predictions — freeing the real first token from parking duty helps.' if data['sink_ppl_input'] < data['std_ppl_input'] else 'Minimal change — the model adapts either way.'}
 """}
@@ -863,7 +865,7 @@ def entropy_controls(mo):
         options=[
             "Standard (baseline)",
             "Temperature scaling",
-            "Sink Token",
+            "Sink token",
         ],
         value="Standard (baseline)",
         label="Condition",
@@ -915,7 +917,7 @@ def entropy_dashboard(
     _cond_keys = {
         "Standard (baseline)": "standard",
         "Temperature scaling": "temp",
-        "Sink Token": "sink",
+        "Sink token": "sink",
     }
     _cond = _cond_keys.get(entropy_radio.value, "standard")
 
@@ -929,7 +931,7 @@ def entropy_dashboard(
     _lbl_map = {
         "standard": "Standard",
         "temp": f"Temperature T={temp_slider.value:.1f}",
-        "sink": "Sink Token",
+        "sink": "Sink token",
     }
     _attn_source = {
         "standard": data["standard_attn"],
@@ -979,6 +981,34 @@ def entropy_dashboard(
     plt.colorbar(_ax2.images[0], ax=_ax2, shrink=0.8, label="Attention weight")
     plt.tight_layout()
 
+    # --- Compare all: 3 entropy grids side by side ---
+    _fig_cmp, _cmp_axes = plt.subplots(1, 3, figsize=(14, 4))
+    for _idx, (_key, _clabel) in enumerate([
+        ("standard", "Standard"),
+        ("temp", f"Temp T={temp_slider.value:.1f}"),
+        ("sink", "Sink token"),
+    ]):
+        _cmp_axes[_idx].imshow(
+            _ent_map[_key], cmap="RdBu", aspect="auto", vmin=_vmin, vmax=_vmax,
+        )
+        _n_sick_k = int((_ent_map[_key] < np.median(_all_ent) * 0.7).sum())
+        _cmp_axes[_idx].set_title(
+            f"{_clabel}\n{_n_sick_k} sick heads",
+            fontsize=10, fontweight="bold",
+        )
+        _cmp_axes[_idx].set_xlabel("Head", fontsize=9)
+        _cmp_axes[_idx].set_xticks(range(data["n_heads"]))
+        _cmp_axes[_idx].set_yticks(range(data["n_layers"]))
+        if _idx == 0:
+            _cmp_axes[_idx].set_ylabel("Layer", fontsize=9)
+        _cmp_axes[_idx].add_patch(
+            _Rect(
+                (dash_head.value - 0.5, dash_layer.value - 0.5), 1, 1,
+                linewidth=2, edgecolor="#f1c40f", facecolor="none",
+            )
+        )
+    plt.tight_layout()
+
     # --- Stats ---
     _median = np.median(_all_ent)
     _thresh = _median * 0.7
@@ -1016,11 +1046,24 @@ def entropy_dashboard(
 
     mo.output.replace(
         mo.vstack([
-            mo.hstack([_fig1, _fig2]),
-            mo.md(
-                f"{_summary}\n\n"
-                f"**Layer {dash_layer.value}, Head {dash_head.value}:** {_head_status}"
-            ),
+            mo.tabs({
+                _lbl_map[_cond]: mo.vstack([
+                    mo.hstack([_fig1, _fig2]),
+                    mo.md(
+                        f"{_summary}\n\n"
+                        f"**Layer {dash_layer.value}, Head {dash_head.value}:** "
+                        f"{_head_status}"
+                    ),
+                ]),
+                "Compare All Conditions": mo.vstack([
+                    _fig_cmp,
+                    mo.md(
+                        f"**Same head across conditions** — yellow box tracks "
+                        f"Layer {dash_layer.value}, Head {dash_head.value} in "
+                        f"all three grids."
+                    ),
+                ]),
+            }),
             mo.callout(
                 mo.md("""
 Not all low-entropy heads are sick. Some heads *should* focus narrowly —
@@ -1366,11 +1409,11 @@ Tested at sequence lengths up to 512 tokens; behavior at longer contexts
             mo.accordion({
                 "Training code: learned sink embedding": mo.md("""
 ```python
-# 768 trainable parameters — one embedding vector prepended at position 0
-sink_embed = nn.Parameter(torch.randn(1, 1, 768) * 0.02)
+# 3,072 trainable parameters — four embedding vectors prepended at position 0
+sink_embed = nn.Parameter(torch.randn(1, 4, 768) * 0.02)
 
 for batch in dataloader:
-    # Prepend learned embedding to input
+    # Prepend learned embeddings to input
     embeds = model.transformer.wte(batch)  # (B, seq, 768)
     embeds = torch.cat([sink_embed.expand(B, -1, -1), embeds], dim=1)
 
@@ -1379,7 +1422,7 @@ for batch in dataloader:
     out.loss.backward()
     optimizer.step()  # only updates sink_embed
 ```
-*500 steps on WikiText-2, AdamW lr=1e-3. Full script: [`train_learned_sink.py`](https://github.com/betsyschultz/alphaxiv-marimo/blob/main/train_learned_sink.py)*
+*2,000 steps on WikiText-2, AdamW lr=5e-3. Full script: [`train_learned_sink.py`](https://github.com/betsyschultz/alphaxiv-marimo/blob/main/train_learned_sink.py)*
 """),
             }),
         ])
@@ -1973,8 +2016,9 @@ transformers already do this.
 distributing 100%, they wouldn't need a bin. MoE models already route
 to "no expert" — same principle for attention.
 
-**3. Let heads share.** Interleaved Head Attention (Meta, 2026) lets
-heads borrow signal from neighbors instead of idling.
+**3. Let heads share.** [Interleaved Head Attention](https://alphaxiv.org/abs/2602.21371)
+([Duvvuri et al., 2026](https://alphaxiv.org/abs/2602.21371)) lets heads
+borrow signal from neighbors instead of idling.
 """),
             mo.md("""
 ---
@@ -1992,7 +2036,7 @@ position — losing it degrades every downstream prediction
 **3. Filter position 0 from attention maps.** 44-66% of attention weight
 is structural parking, not meaningful signal.
 
-**4. Don't train sinks away.** 4 weights × 3 seeds. Even at λ=10, sinks
+**4. Don't train sinks away.** 4 λ values × 3 seeds. Even at λ=10, sinks
 hold at 45%. The compute is wasted.
 
 **5. Prune sink heads first.** They're 29× less critical than random heads.
@@ -2017,6 +2061,7 @@ you can't lose.
 - Sun, Z., et al. (2026). [The Spike, the Sparse and the Sink](https://alphaxiv.org/abs/2603.05498).
 - Xiao, G., et al. (2023). [Efficient Streaming Language Models with Attention Sinks](https://alphaxiv.org/abs/2309.17453).
 - Zhai, S. (2026). [Exclusive Self Attention](https://alphaxiv.org/abs/2603.09078).
+- Duvvuri, S. S., et al. (2026). [Interleaved Head Attention](https://alphaxiv.org/abs/2602.21371).
 - Zweiger, A., et al. (2026). [Fast KV Compaction via Attention Matching](https://alphaxiv.org/abs/2602.16284).
 """),
         ])
