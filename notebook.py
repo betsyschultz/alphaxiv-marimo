@@ -6,7 +6,6 @@
 #     "transformers",
 #     "numpy",
 #     "matplotlib",
-#     "plotly",
 # ]
 # ///
 
@@ -79,31 +78,24 @@ def executive_summary(data, mo, np, plt):
             mo.md(f"""
 *Betsy Schultz · GPT-2 (124M) · {data['seq_len']} tokens · {"loaded from cache" if data["from_cache"] else "computed"} in {data['elapsed']:.1f}s*
 
-*8 fix approaches tested, validated on GPT-2 + LLaMA-3.2-1B + Pythia-70M,
-and a method that works — all interactive below.*
-
-*This notebook empirically investigates
+*An empirical investigation of
 [Ran-Milo (2026)](https://alphaxiv.org/abs/2603.11487), which proved that
 pre-norm transformers mathematically require attention sinks for
 representational stability. Building on the sink token concept from
 [Xiao et al. (2023)](https://alphaxiv.org/abs/2309.17453), I test whether
-sinks can be removed, retrained, or improved.*
+sinks can be removed, retrained, or improved — validated across GPT-2 +
+LLaMA-3.2-1B + Pythia-70M.*
 
 GPT-2 wastes over **44% of its attention** staring at the first word —
 regardless of what that word is. Every attention head must point somewhere,
 so idle heads dump on position 0. That's an attention sink: a garbage bin.
 
-I tested 8 ways to fix this. None worked — the model *needs* the bin.
-But training a better one (768 parameters, 2 minutes)
-**makes GPT-2 19.7% better** (perplexity 44.5 → 35.7; lower is better) **and LLaMA-3.2-1B 26.7% better** (16.95 → 12.43) **at predicting language.** Same tokens placed at the end? 0% improvement on both
-models. The effect is entirely about the garbage bin position.
+I tested 8 ways to fix this. Can you train sinks away? Redistribute
+them? Force sick heads to spread out? Scroll through the interactive
+experiments below to find out — and to discover the one approach that
+actually worked.
 """),
             _fig_bar,
-            mo.hstack([
-                mo.stat(value="-26.7%", label="LLaMA-1B with a better bin", bordered=True),
-                mo.stat(value="29×", label="less critical than random heads", bordered=True),
-                mo.stat(value="8,192", label="numbers trained (of 1.2 billion)", bordered=True),
-            ], justify="center", gap=1),
         ])
     )
 
@@ -891,6 +883,9 @@ of its attention on the garbage bin.
 
 **Blue = healthy** · **Red = sick** · Start at Layer 7, Head 3 — a clearly sick head.
 
+*The temperature slider above controls the "Temperature scaling" condition here too —
+change it to see how different temperatures affect head health.*
+
 *How I define "sick": a head whose attention is more concentrated than 70% of
 all heads. I verified this by checking that heads I classified as sick visually
 show the garbage stripe, and that the count stays stable if I adjust the threshold.*
@@ -1269,7 +1264,7 @@ So gradient-based training can't remove sinks. What about iterating?
 
 {_recursive_md}
 
-This empirically confirms
+This is consistent with
 [Ran-Milo (2026)](https://alphaxiv.org/abs/2603.11487): pre-norm
 transformers mathematically require sinks for representational stability.
 
@@ -1377,43 +1372,31 @@ def ablation_centerpiece(data, mo, np, plt):
     _diffuse_delta = _diffuse_ppl - _baseline
     _ratio = _random_delta / _sink_delta
 
-    # --- Main ablation bar chart (plotly, interactive) ---
-    import plotly.graph_objects as _go
-
+    # --- Main ablation bar chart ---
     _conditions = [
-        f"Baseline<br>(no ablation)", f"Sink heads<br>zeroed ({_n_sink})",
-        f"Random heads<br>zeroed ({_n_sink})", f"Noisy heads<br>zeroed ({_n_diffuse})",
+        f"Baseline\n(no ablation)", f"Sink heads\nzeroed ({_n_sink})",
+        f"Random heads\nzeroed ({_n_sink})", f"Noisy heads\nzeroed ({_n_diffuse})",
     ]
     _ppls = [_baseline, _sink_ppl, _random_ppl, _diffuse_ppl]
     _colors = ["#95a5a6", "#e74c3c", "#2c3e50", "#3498db"]
-    _hover = [
-        f"Baseline: {_baseline:.1f} PPL",
-        f"Sink heads: {_sink_ppl:.1f} PPL (+{_sink_delta:.0f})<br>{_n_sink} heads removed",
-        f"Random heads: {_random_ppl:,.0f} PPL (+{_random_delta:,.0f})<br>{_n_sink} heads removed",
-        f"Noisy heads: {_diffuse_ppl:.1f} PPL (+{_diffuse_delta:.0f})<br>{_n_diffuse} heads removed",
-    ]
 
-    _fig_abl = _go.Figure(data=[_go.Bar(
-        x=_conditions, y=_ppls,
-        marker_color=_colors,
-        text=[f"{p:,.0f}" for p in _ppls],
-        textposition=["outside", "outside", "inside", "outside"],
-        textfont=dict(size=14, color=["#2c3e50", "#2c3e50", "white", "#2c3e50"]),
-        hovertext=_hover,
-        hoverinfo="text",
-    )])
-    _fig_abl.update_layout(
-        title=dict(text="What Happens When You Remove Heads?", font=dict(size=16)),
-        yaxis=dict(type="log", title="Perplexity (log scale)", gridcolor="#eee"),
-        plot_bgcolor="#fafafa", paper_bgcolor="#fafafa",
-        height=420, margin=dict(t=60, b=80),
-        annotations=[dict(
-            x=1.5, y=np.log10(_random_ppl * 0.4),
-            text=f"<b>{_ratio:.0f}× gap</b>",
-            showarrow=False, font=dict(size=16, color="#2c3e50"),
-            yref="y",
-        )],
-    )
+    _fig_abl, _ax_abl = plt.subplots(figsize=(10, 5))
+    _bars_abl = _ax_abl.bar(_conditions, _ppls, color=_colors, width=0.5)
+    _ax_abl.set_yscale("log")
+    _ax_abl.set_ylabel("Perplexity (log scale)", fontsize=11)
+    _ax_abl.set_title("What Happens When You Remove Heads?", fontsize=14, fontweight="bold")
+    _ax_abl.grid(True, alpha=0.15, axis="y")
+    for _b, _v in zip(_bars_abl, _ppls):
+        _y_pos = _v * 1.15 if _v < 500 else _v * 0.5
+        _va = "bottom" if _v < 500 else "top"
+        _fc = "#2c3e50" if _v < 500 else "white"
+        _ax_abl.text(
+            _b.get_x() + _b.get_width() / 2, _y_pos,
+            f"{_v:,.0f}", ha="center", va=_va, fontweight="bold", fontsize=12, color=_fc,
+        )
+    _ax_abl.text(1.5, _random_ppl * 0.4, f"{_ratio:.0f}× gap",
+                 ha="center", fontsize=14, fontweight="bold", color="#2c3e50")
+    plt.tight_layout()
 
     # --- Load cumulative ablation if available ---
     _cumulative_elements = []
@@ -1421,14 +1404,12 @@ def ablation_centerpiece(data, mo, np, plt):
         with open(_os.path.join(_dir, "cumulative_ablation.json")) as _f:
             _cum = _json.load(_f)
 
-        import plotly.graph_objects as _go_cum
-
-        _fig_cum = _go_cum.Figure()
         _style = {
             "sink_first": ("#2ecc71", "Sink heads first (least critical)"),
             "random": ("#95a5a6", "Random order"),
             "important_first": ("#e74c3c", "Important heads first (most critical)"),
         }
+        _fig_cum, _ax_cum = plt.subplots(figsize=(10, 5))
         for _curve_name, (_color, _label) in _style.items():
             _curve = _cum["curves"][_curve_name]
             _xs = np.array([p["n_heads"] for p in _curve])
@@ -1436,31 +1417,18 @@ def ablation_centerpiece(data, mo, np, plt):
             _ys_smooth = np.convolve(_ys, np.ones(3)/3, mode="same")
             _ys_smooth[0] = _ys[0]
             _ys_smooth[-1] = _ys[-1]
-            # Raw points (faded)
-            _fig_cum.add_trace(_go_cum.Scatter(
-                x=_xs, y=_ys, mode="markers", marker=dict(color=_color, size=6, opacity=0.35),
-                showlegend=False, hovertext=[f"n={x}: PPL={y:.0f}" for x, y in zip(_xs, _ys)],
-                hoverinfo="text",
-            ))
-            # Smoothed trend
-            _fig_cum.add_trace(_go_cum.Scatter(
-                x=_xs, y=_ys_smooth, mode="lines", line=dict(color=_color, width=3),
-                name=_label,
-                hovertext=[f"{_label}<br>n={x}: PPL≈{y:.0f}" for x, y in zip(_xs, _ys_smooth)],
-                hoverinfo="text",
-            ))
-        # n=30 reference line
-        _fig_cum.add_vline(x=30, line_dash="dot", line_color="#888", opacity=0.5,
-                           annotation_text="n=30 (ablation test)", annotation_position="top right",
-                           annotation_font_size=10, annotation_font_color="#888")
-        _fig_cum.update_layout(
-            title=dict(text="The Shape of Failure", font=dict(size=16)),
-            xaxis=dict(title="Number of heads removed (of 144)"),
-            yaxis=dict(title="Perplexity", type="log", gridcolor="#eee"),
-            plot_bgcolor="#fafafa", paper_bgcolor="#fafafa",
-            height=420, margin=dict(t=60, b=60),
-            legend=dict(x=0.02, y=0.98, bgcolor="rgba(255,255,255,0.8)"),
-        )
+            _ax_cum.scatter(_xs, _ys, color=_color, s=20, alpha=0.35)
+            _ax_cum.plot(_xs, _ys_smooth, color=_color, linewidth=3, label=_label)
+        _ax_cum.set_yscale("log")
+        _ax_cum.axvline(x=30, color="#888", linestyle=":", alpha=0.5)
+        _ax_cum.text(31, _ax_cum.get_ylim()[1] * 0.9, "n=30 (ablation test)",
+                     fontsize=9, color="#888")
+        _ax_cum.set_xlabel("Number of heads removed (of 144)", fontsize=11)
+        _ax_cum.set_ylabel("Perplexity (log scale)", fontsize=11)
+        _ax_cum.set_title("The Shape of Failure", fontsize=14, fontweight="bold")
+        _ax_cum.legend(fontsize=9, loc="upper left", framealpha=0.8)
+        _ax_cum.grid(True, alpha=0.15)
+        plt.tight_layout()
 
         _cumulative_elements = [
             _fig_cum,
@@ -1529,15 +1497,9 @@ def adaptive_controls(mo):
             mo.md("""
 ## What If You Force Sick Heads to Spread Out?
 
-I know which heads are sick. What if I force them to look at more words
-instead of just staring at the garbage bin? For each sick head, I soften
-its attention in proportion to how sick it is. Healthy heads stay untouched.
-
-Drag the slider. Watch sick heads (red) turn healthy (blue) in real time.
-
-*Treatment strength = how aggressively we force sick heads to pay attention
-to more words instead of staring at the garbage bin. 0 = no intervention,
-2 = maximum spread.*
+For each sick head, I soften its attention proportional to how sick it is.
+Healthy heads stay untouched. Drag the slider to watch sick heads (red)
+turn healthy (blue) — then see whether the model actually changes its output.
 """),
             mo.callout(adapt_strength, kind="info"),
         ])
@@ -1661,8 +1623,20 @@ top-1 predictions agree {_top1:.0f}% of the time. Perplexity: {_std_ppl:.1f} →
 
 @app.cell
 def try_controls(mo):
-    custom_text = mo.ui.text_area(
+    _examples = {
+        "": "",
+        "Python code": "def fibonacci(n):\n    if n <= 1:\n        return n\n    a, b = 0, 1\n    for _ in range(2, n + 1):\n        a, b = b, a + b\n    return b\n\nfor i in range(20):\n    print(f'fib({i}) = {fibonacci(i)}')",
+        "Poetry (Dickinson)": "Because I could not stop for Death,\nHe kindly stopped for me;\nThe carriage held but just ourselves\nAnd Immortality.\n\nWe slowly drove, he knew no haste,\nAnd I had put away\nMy labor, and my leisure too,\nFor his civility.",
+        "Grocery list": "eggs, milk, bread, butter, apples, chicken thighs, olive oil, garlic, onions, pasta, canned tomatoes, mozzarella, basil, salt, pepper, rice, black beans, avocados, limes, cilantro",
+        "Legal text": "Notwithstanding any other provision of this Agreement, the indemnifying party shall not be liable for any indirect, incidental, consequential, special, or exemplary damages arising out of or related to this Agreement, including but not limited to loss of revenue, loss of profits, loss of business, or loss of data, even if such party has been advised of the possibility of such damages.",
+    }
+    example_picker = mo.ui.dropdown(
+        options=list(_examples.keys()),
         value="",
+        label="Or try an example",
+    )
+    custom_text = mo.ui.text_area(
+        value=_examples.get(example_picker.value, ""),
         placeholder="Paste any text here to see its attention sink pattern...",
         label="Your text (truncated to 512 tokens)",
         max_length=2000,
@@ -1675,10 +1649,9 @@ def try_controls(mo):
 ## Try It Yourself
 
 Paste any text and see where GPT-2's attention goes. Does the sink
-still dominate? Try different content — code, poetry, a grocery list.
-The garbage bin doesn't care what you write.
+still dominate? Pick an example or paste your own.
 """),
-            custom_text,
+            mo.hstack([example_picker, custom_text], widths=[0.25, 0.75], gap=1),
         ])
     )
     return (custom_text,)
