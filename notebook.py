@@ -1879,6 +1879,8 @@ lets heads borrow useful signal from neighbors instead of idling.
 Fewer idle heads = less garbage = less need for a bin.
 """),
             mo.md("""
+---
+
 ## What You Can Do Today
 
 These aren't theoretical suggestions — they come directly from the
