@@ -31,7 +31,7 @@ def title():
     _mo.output.replace(
         _mo.md("""
 # Every Transformer Has a Garbage Bin
-## It's not a bug. But you can build a better one.
+## You can't remove it. But you can build a better one.
 """)
     )
 
@@ -90,10 +90,13 @@ GPT-2 wastes over **44% of its attention** staring at the first word —
 regardless of what that word is. Every attention head must point somewhere,
 so idle heads dump on position 0. That's an attention sink: a garbage bin.
 
-I tested 8 ways to fix this. Can you train sinks away? Redistribute
-them? Force sick heads to spread out? Scroll through the interactive
-experiments below to find out — and to discover the one approach that
-actually worked.
+I tested 8 ways to fix this — training, redistribution, architectural
+tweaks — across GPT-2, LLaMA-3.2-1B, and Pythia-70M. Seven failed.
+The eighth revealed something useful: sinks are necessary but the
+*default* sink is suboptimal. A purpose-built one (4 learned embeddings,
+model frozen) improves perplexity **19.7%** on GPT-2 and **26.7%** on
+LLaMA — and the same tokens at the *end* of the sequence do nothing,
+proving this is about the garbage bin, not prompt tuning.
 """),
             _fig_bar,
         ])
@@ -1085,6 +1088,34 @@ def training_experiments(data, mo, np, plt):
             {"round": 4, "ppl": 22.11, "sink": 45.5, "sick": 27, "healthy": 102, "diffuse": 15},
         ]
 
+    # Multiseed sweep results (per-seed data)
+    try:
+        _multiseed_path = _os.path.join(_dir, "multiseed_sweep_results.json")
+        with open(_multiseed_path) as _f:
+            _multiseed = _json.load(_f)
+    except Exception:
+        _multiseed = []
+
+    # --- Per-seed table builder ---
+    def _build_perseed_table(ms_data):
+        if not ms_data:
+            return "*Per-seed data not available.*"
+        _rows = []
+        for _r in ms_data:
+            _rows.append(
+                f"| {_r['lambda_align']} | {_r['seed']} "
+                f"| {_r['final']['sink_waste_pct']}% "
+                f"| {_r['final']['perplexity']} "
+                f"| {_r['final']['num_sick_heads']} |"
+            )
+        return (
+            "| λ_align | Seed | Sink waste | PPL | Sick heads |\n"
+            "|---------|------|-----------|-----|------------|\n"
+            + "\n".join(_rows)
+            + "\n\n*All seeds start from the same baseline: 47.4% sink waste, "
+            "44.5 PPL, 34 sick heads.*"
+        )
+
     # --- Training curves (2x2) ---
     _fig, _axes = plt.subplots(2, 2, figsize=(12, 8))
 
@@ -1238,11 +1269,12 @@ It chose not to.
                 kind="warn",
             ),
             _fig,
-            mo.md(f"""
-### What if I pushed harder?
-
+            mo.accordion({
+                "What if I pushed harder? (λ sweep + recursive training)": mo.vstack([
+                    mo.md(f"""
 I swept the cleanup weight across four strengths, each repeated with
-three random seeds:
+three random seeds. Every seed tells the same story: sinks hold steady
+regardless of pressure.
 
 | λ_align | Sink waste (mean ± std) | PPL after | Sick heads |
 |---------|------------------------|-----------|------------|
@@ -1253,11 +1285,10 @@ three random seeds:
 
 *Baseline for this sweep: 47.4% sink waste, 44.5 PPL, 34 sick heads (fresh
 GPT-2 weights, measured at the start of each run — slightly different from
-the notebook's main baseline due to different evaluation points). Standard
-deviations across seeds are ±0.2-0.4%.*
+the notebook's main baseline due to different evaluation points).*
 
 At gentle pressure, sinks *increase* — better language modeling means more
-specialized heads, more idle time, more garbage. At 10× pressure the model
+specialized heads, more idle time, more garbage. At 100× pressure the model
 barely budges: sinks still **45.3%**, and language quality degrades.
 
 So gradient-based training can't remove sinks. What about iterating?
@@ -1267,12 +1298,19 @@ So gradient-based training can't remove sinks. What about iterating?
 This is consistent with
 [Ran-Milo (2026)](https://alphaxiv.org/abs/2603.11487): pre-norm
 transformers mathematically require sinks for representational stability.
+"""),
+                    mo.accordion({
+                        "Per-seed breakdown": mo.md(_build_perseed_table(_multiseed)),
+                    }),
+                ]),
+            }),
+            mo.md("""
+### Necessity ≠ optimality: building a better garbage bin
 
-### The one thing that worked: a better garbage bin
-
-If the model insists on a dump target, give it a purpose-built one.
-I trained a single embedding vector (768 parameters, model frozen) and
-tested three interventions to separate sinks from generic prompt tuning.
+Sinks can't be removed — but the default sink (whatever random word
+starts the sequence) is suboptimal. I trained a purpose-built sink:
+a single embedding vector (768 parameters, model frozen) optimized
+to absorb garbage attention cleanly.
 """),
             mo.hstack([
                 mo.stat(value="-19.7%", label="GPT-2 improvement", bordered=True),
@@ -1300,22 +1338,30 @@ tested three interventions to separate sinks from generic prompt tuning.
 
 The position control is definitive across both models: **tokens at the end
 do nothing.** 0.0% improvement — same tokens, same training. The effect is
-entirely about the garbage bin at position 0.
-
-The improvement is *stronger* on LLaMA-1B (-26.7%) than GPT-2 (-19.7%),
-despite LLaMA using rotary embeddings. LLaMA also has higher sink waste
-(65.6% vs 44.3%) — more garbage to manage, more room for a better bin.
-
-This is not soft prompting ([Lester et al., 2021](https://alphaxiv.org/abs/2104.08691)). Soft prompts
+entirely about the garbage bin at position 0. This is not soft prompting
+([Lester et al., 2021](https://alphaxiv.org/abs/2104.08691)) — soft prompts
 work regardless of position. These only work at the front, where the garbage
 collects.
-
-Sinks didn't decrease — they stayed at ~41%. But the model got better at
-language because its first real token is no longer corrupted. The OFF switch
-isn't broken. It just works better when it's purpose-built.
+"""),
+            mo.callout(
+                mo.md("""
+**Why this works when training fails:** Training tries to change what
+144 heads do — fighting the architectural constraint Ran-Milo proved
+necessary. The learned embedding changes what they dump *on* instead.
+The model keeps its garbage bin (sinks stay at ~41%) but the bin is
+purpose-built, so the first real token is no longer corrupted. The
+stronger improvement on LLaMA (-26.7% vs GPT-2's -19.7%) confirms the
+mechanism: LLaMA has higher sink waste (65.6%), meaning more garbage to
+manage and more room for a better bin.
+"""),
+                kind="success",
+            ),
+            mo.md("""
 
 *All perplexity numbers evaluated on the WikiText-2 validation split
-(separate from training data). Training used the WikiText-2 train split.*
+(separate from training data). Training used the WikiText-2 train split.
+Tested at sequence lengths up to 512 tokens; behavior at longer contexts
+(4K+) is untested.*
 """),
             mo.accordion({
                 "Training code: learned sink embedding": mo.md("""
@@ -1862,28 +1908,31 @@ time → busier garbage bin.
             mo.md("### Cross-Model Validation"),
             _fig_cross,
             mo.md("""
-Three architectures, three different sink profiles:
+| | GPT-2 | Pythia-70M | LLaMA-3.2-1B |
+|---|---|---|---|
+| **Parameters** | 124M | 70M | 1.2B |
+| **Layers × Heads** | 12 × 12 | 6 × 8 | 16 × 32 |
+| **Position encoding** | Absolute | Rotary | Rotary |
+| **Sink waste** | 44.3% | **3.3%** | **65.6%** |
+| **Sick heads** | 21.5% | **45.8%** | 33.0% |
+| **Pattern** | Deep sink | Low sink, high sick | Deepest sink |
+"""),
+            mo.callout(
+                mo.md("""
+**Pythia-70M is the key.** Lowest sink waste (3.3%) but *highest* sick
+heads (45.8%). With only 6 layers, heads haven't specialized enough
+to need a parking spot — they're all busy doing narrow work. This
+separates two phenomena that look identical in deeper models:
+**low entropy from useful specialization** vs. **low entropy from
+garbage dumping.**
 
-- **GPT-2** (124M, 12 layers, absolute position embeddings): 44% sink waste
-- **Pythia-70M** (70M, 6 layers, rotary embeddings): 3% sink waste — but half its heads are "sick"
-- **LLaMA-3.2-1B** (1.2B, 16 layers, rotary embeddings): **65.6% sink waste** — the highest of all three
-
-Pythia-70M is the outlier — and the most revealing. It has the *lowest*
-sink waste (3.3%) but the *highest* proportion of sick heads (45.8%).
-Its final two layers have every head at zero entropy — maximally
-focused, but not on position 0. With only 6 layers, heads haven't
-specialized enough to need a parking spot. They're all busy, but busy
-doing narrow work — hence "sick" by our entropy metric without being
-sink-dominated. This separates two phenomena that look identical in
-deeper models: **low entropy from useful specialization** vs. **low
-entropy from garbage dumping.**
-
-LLaMA — also using rotary embeddings
-([Su et al., 2021](https://alphaxiv.org/abs/2104.09864)), but with 16
-layers — sinks *more* than GPT-2 (65.6% vs 44.3%). Same embedding
-trick, 2.7× more depth, 50% more sink waste. Depth drives sinks, not
-position encoding.
-
+LLaMA uses the same rotary embeddings as Pythia but with 16 layers —
+and sinks *more* than GPT-2 (65.6% vs 44.3%). **Depth drives sinks,
+not position encoding.**
+"""),
+                kind="info",
+            ),
+            mo.md("""
 *Validated on GPT-2, Pythia-70M, and LLaMA-3.2-1B — all pre-norm architectures.
 Post-norm models (PaLM, early BERT) may differ; theory predicts reduced sinks
 but this is untested.*
