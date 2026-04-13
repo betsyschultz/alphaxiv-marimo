@@ -49,7 +49,8 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 model = AutoModelForCausalLM.from_pretrained(
-    MODEL_NAME, torch_dtype=torch.float16, device_map="auto"
+    MODEL_NAME, torch_dtype=torch.float16, device_map="auto",
+    attn_implementation="eager",
 )
 model.eval()
 
