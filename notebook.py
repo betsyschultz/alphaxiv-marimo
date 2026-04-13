@@ -1051,7 +1051,7 @@ def entropy_dashboard(
 
     mo.output.replace(
         mo.vstack([
-            mo.tabs({
+            mo.ui.tabs({
                 _lbl_map[_cond]: mo.vstack([
                     mo.hstack([_fig1, _fig2]),
                     mo.md(
@@ -1732,28 +1732,20 @@ def model_loader(data):
     return (gpt2_loader,)
 
 
-# CELL 11C: TRY IT YOURSELF (controls)
+# CELL 11C: TRY IT YOURSELF (example picker)
 
 @app.cell
-def try_controls(mo):
-    _examples = {
-        "": "",
-        "Python code": "def fibonacci(n):\n    if n <= 1:\n        return n\n    a, b = 0, 1\n    for _ in range(2, n + 1):\n        a, b = b, a + b\n    return b\n\nfor i in range(20):\n    print(f'fib({i}) = {fibonacci(i)}')",
-        "Poetry (Dickinson)": "Because I could not stop for Death,\nHe kindly stopped for me;\nThe carriage held but just ourselves\nAnd Immortality.\n\nWe slowly drove, he knew no haste,\nAnd I had put away\nMy labor, and my leisure too,\nFor his civility.",
-        "Grocery list": "eggs, milk, bread, butter, apples, chicken thighs, olive oil, garlic, onions, pasta, canned tomatoes, mozzarella, basil, salt, pepper, rice, black beans, avocados, limes, cilantro",
-        "Legal text": "Notwithstanding any other provision of this Agreement, the indemnifying party shall not be liable for any indirect, incidental, consequential, special, or exemplary damages arising out of or related to this Agreement, including but not limited to loss of revenue, loss of profits, loss of business, or loss of data, even if such party has been advised of the possibility of such damages.",
-    }
+def try_picker(mo):
     example_picker = mo.ui.dropdown(
-        options=list(_examples.keys()),
+        options={
+            "": "",
+            "Python code": "def fibonacci(n):\n    if n <= 1:\n        return n\n    a, b = 0, 1\n    for _ in range(2, n + 1):\n        a, b = b, a + b\n    return b\n\nfor i in range(20):\n    print(f'fib({i}) = {fibonacci(i)}')",
+            "Poetry (Dickinson)": "Because I could not stop for Death,\nHe kindly stopped for me;\nThe carriage held but just ourselves\nAnd Immortality.\n\nWe slowly drove, he knew no haste,\nAnd I had put away\nMy labor, and my leisure too,\nFor his civility.",
+            "Grocery list": "eggs, milk, bread, butter, apples, chicken thighs, olive oil, garlic, onions, pasta, canned tomatoes, mozzarella, basil, salt, pepper, rice, black beans, avocados, limes, cilantro",
+            "Legal text": "Notwithstanding any other provision of this Agreement, the indemnifying party shall not be liable for any indirect, incidental, consequential, special, or exemplary damages arising out of or related to this Agreement, including but not limited to loss of revenue, loss of profits, loss of business, or loss of data, even if such party has been advised of the possibility of such damages.",
+        },
         value="",
         label="Or try an example",
-    )
-    custom_text = mo.ui.text_area(
-        value=_examples.get(example_picker.value, ""),
-        placeholder="Paste any text here to see its attention sink pattern...",
-        label="Your text (truncated to 512 tokens)",
-        max_length=2000,
-        full_width=True,
     )
 
     mo.output.replace(
@@ -1772,9 +1764,25 @@ is completely different.
 *First use may take a moment to load the model (CPU inference). All
 attention data above is precomputed.*
 """),
-            mo.hstack([example_picker, custom_text], widths=[0.25, 0.75], gap=1),
+            example_picker,
         ])
     )
+    return (example_picker,)
+
+
+# CELL 11C2: TRY IT YOURSELF (text input)
+
+@app.cell
+def try_controls(example_picker, mo):
+    custom_text = mo.ui.text_area(
+        value=example_picker.value or "",
+        placeholder="Paste any text here to see its attention sink pattern...",
+        label="Your text (truncated to 512 tokens)",
+        max_length=2000,
+        full_width=True,
+    )
+
+    mo.output.replace(custom_text)
     return (custom_text,)
 
 
@@ -2089,7 +2097,7 @@ you can't lose.
 - Ran-Milo (2026). [Attention Sinks Are Provably Necessary](https://alphaxiv.org/abs/2603.11487). This notebook empirically tests that claim.
 
 **Other references:**
-- Darcet, T., et al. (2024). [Register Tokens in Vision Transformers](https://alphaxiv.org/abs/2309.16588).
+- Darcet, T., et al. (2024). [Vision Transformers Need Registers](https://alphaxiv.org/abs/2309.16588).
 - Lester, B., et al. (2021). [The Power of Scale for Parameter-Efficient Prompt Tuning](https://alphaxiv.org/abs/2104.08691).
 - Su, J., et al. (2021). [RoFormer: Enhanced Transformer with Rotary Position Embedding](https://alphaxiv.org/abs/2104.09864).
 - Sun, Z., et al. (2026). [The Spike, the Sparse and the Sink](https://alphaxiv.org/abs/2603.05498).
