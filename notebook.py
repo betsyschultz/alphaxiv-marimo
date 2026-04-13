@@ -1260,16 +1260,15 @@ It chose not to.
             ),
             _fig,
             mo.md(f"""
-The top-left panel shows the model learning. LM loss drops across
-all three epochs. The top-right shows alignment loss barely moves.
-The bottom row is the punchline: sink waste and sick head count lock in
-early and never budge.
+The top-left shows the model learning (loss dropping). The top-right shows
+the cleanup incentive barely moving. The bottom row is the punchline:
+garbage stays put no matter how much the model learns.
 
-### What if the signal was too weak?
+### What if I pushed harder?
 
-The original training used λ_align = 0.1 (alignment loss at 10% of LM
-loss). A natural objection: maybe the gradient signal was just too weak.
-So I swept across four alignment weights, each with three random seeds:
+The first experiment used a gentle cleanup incentive (10% of the training
+signal). Maybe that wasn't enough. So I tried four different strengths,
+each repeated three times with different random starting points:
 
 | λ_align | Sink waste (mean ± std) | PPL after | Sick heads |
 |---------|------------------------|-----------|------------|
@@ -1282,22 +1281,19 @@ So I swept across four alignment weights, each with three random seeds:
 fresh GPT-2 weights. Standard deviations across seeds are ±0.2-0.4% — the
 pattern is stable regardless of initialization.*
 
-Two patterns emerge. From λ = 0.1 to 1.0, sinks *increase* as the model
-improves — more specialized heads means more idle capacity that needs
-parking. At λ = 10.0, where alignment loss dominates language modeling
-10-to-1, the model finally trades language quality (+1.9 PPL) for a
-marginal sink reduction — but sinks still sit at **45.3%**. Even under
-extreme gradient pressure, the structural floor holds. This isn't a
-weak-signal problem. The architecture requires these sinks.
+Two patterns. At gentle-to-moderate pressure, sinks actually *increase*
+as the model improves — more specialized workers means more idle time, which
+means more garbage. At 10× pressure, the model finally budges — trading
+language quality for a tiny sink reduction. But sinks still sit at **45.3%**.
+Even when the entire training signal screams "stop doing this," the model
+barely flinches.
 
 {_recursive_md}
 
-To be clear: sinks don't cost extra compute. The model does the same
-amount of math whether attention goes to the sink or to meaningful tokens. And
-the increased sinks didn't hurt output quality — perplexity *improved*.
-The model builds more structural support as it gets better, not
-less. More specialized heads means more heads sitting idle in any given
-context, and idle heads need somewhere safe to park.
+Sinks don't cost extra compute — the model does the same amount of math
+either way. And more sinks didn't hurt quality — perplexity *improved*.
+A better model has more specialized workers, more idle time, and more need
+for a garbage bin. The bin gets busier as the model gets smarter.
 
 This empirically confirms Ran-Milo's *"Attention Sinks Are
 Provably Necessary"*
@@ -1511,9 +1507,10 @@ not just at n=30, but everywhere along the curve.
             mo.md(f"""
 ## The Ablation Test
 
-If sinks are just parking spots, what happens when you remove them?
-I zeroed out {_n_sink} sink heads, {_n_sink} random healthy heads, and
-{_n_diffuse} high-entropy heads, then measured perplexity on WikiText-2.
+If the garbage bin is just a parking spot, what happens when you remove it?
+I shut off {_n_sink} garbage-bin heads completely, then did the same to
+{_n_sink} random working heads and {_n_diffuse} high-performing heads for
+comparison. (Perplexity = how surprised the model is — lower is better.)
 """),
             _fig_abl,
             mo.hstack([
@@ -1859,63 +1856,60 @@ from scratch produce healthier attention than retrofitting a sink token?
 """),
             }),
             mo.md("""
-### What might actually work
+### What would fix this at the architecture level
 
-Every fix I tested accepts the softmax constraint and tries to work around
-it. The results suggest the constraint itself is the problem. Three directions
-worth investigating:
+The learned tokens are a retrofit. Three approaches could solve it
+from the ground up:
 
-**1. Learned register tokens** ([Darcet et al., 2024](https://alphaxiv.org/abs/2309.16588) —
-vision transformers). Instead of retrofitting a sink token, train with explicit
-"parking" tokens from the start. The model learns *how many* parking spots it
-needs per layer rather than hijacking position 0. My sink token experiment
-shows the mechanism works; registers formalize it.
+**1. Built-in garbage bins** ([Darcet et al., 2024](https://alphaxiv.org/abs/2309.16588)).
+Instead of retrofitting tokens after training, add "register" tokens
+during training. The model learns how many bins it needs. Vision
+transformers already do this. Language models should too.
 
-**2. Sparse attention with explicit null routing.** Replace softmax with an
-attention function that has a native "attend to nothing" option — not ReLU
-(which backfires at length), but a learned gate per head that can route
-attention to a null sink without corrupting real token representations.
-MoE models already route tokens to "no expert." The same principle applied
-to attention heads would eliminate the need for structural parking entirely.
+**2. Let heads say "nothing."** Right now, every head must distribute
+100% of its attention somewhere. If heads could output zero — a native
+"I have nothing useful to do" signal — they wouldn't need a garbage
+bin at all. Mixture-of-Experts models already route to "no expert."
+The same principle for attention heads.
 
-**3. Cross-head communication.** Interleaved Head Attention
-(Meta, UT Austin, UC Berkeley, Harvard, MIT, 2026) constructs pseudo-heads as
-learned mixtures of original projections, enabling heads to share what
-they've found. Idle heads could borrow useful signal from active neighbors
-instead of parking — reducing the *demand* for sinks rather than fighting
-their existence.
-
-All three directions work *with* the discovery that parking is necessary —
-and formalize it rather than fighting the architecture.
+**3. Let heads share.** Interleaved Head Attention (Meta et al., 2026)
+lets heads borrow useful signal from neighbors instead of idling.
+Fewer idle heads = less garbage = less need for a bin.
 """),
             mo.md("""
-## What to Do With This
+## What You Can Do Today
 
-Sinks don't cost extra compute and don't hurt output quality. Why
-study them? Three practical reasons:
+These aren't theoretical suggestions — they come directly from the
+experiments in this notebook.
 
-- **KV cache compression.** Keep position 0 in cache, aggressively evict
-others — real memory savings for long-context serving
-([Zweiger et al.](https://alphaxiv.org/abs/2602.16284), PyramidKV).
+**1. Prepend learned tokens for free improvement.**
+Train 4 embeddings at position 0, freeze the model. On GPT-2: -19.7%
+perplexity. On LLaMA-3.2-1B: -26.7%. Takes ~10 minutes of training,
+costs nothing at inference. Position matters — the same tokens at the
+end do 0.0%.
 
-- **Interpretability.** Over 44% of attention weight is structural parking.
-Filter it out before reading attention patterns.
+**2. Never evict position 0 from your KV cache.**
+When compressing the key-value cache for long-context serving, keep
+the first token. It's the most-attended position in the model — losing
+it degrades every downstream prediction
+([Zweiger et al.](https://alphaxiv.org/abs/2602.16284)).
 
-- **Architecture design.** Understanding sinks are necessary led to
-[register tokens](https://alphaxiv.org/abs/2309.16588) in vision transformers —
-explicit sink slots built into the architecture from the start.
+**3. Filter out the garbage before reading attention maps.**
+If you're interpreting attention patterns to understand what the model
+is doing, ignore position 0. Over 44-66% of attention weight is
+structural parking, not meaningful signal.
 
-### If you're building with transformers
+**4. Don't try to train sinks away.**
+I tested alignment losses at 4 weights × 3 seeds. The model improves
+at language but refuses to change its attention. Even at λ=10 (10× the
+weight on alignment vs language modeling), sinks hold. Don't waste
+compute on this.
 
-- **Serving long contexts?** Keep the sink token in your KV cache. It's
-cheap to store and expensive to lose.
-- **Reading attention maps?** Filter out position 0 before interpreting.
-- **Pruning heads?** Don't start with sinks — they're the least critical.
-High-entropy heads in early and final layers matter far more per-head.
-- **Designing a new architecture?** Add explicit register/sink tokens from
-the start. The model will create parking spots regardless.
-- **Fine-tuning with attention-shaping losses?** Don't expect sink patterns
-to change. Even at λ=1.0, sinks hold.
+**5. Prune sink heads first, not last.**
+When removing heads for efficiency, start with sink-dominated heads.
+They're 29× less critical than random heads. The high-entropy "noisy"
+heads in layers 0-1 and the final layer are the ones you can't afford
+to lose.
 
 **Limitation:** Validated on GPT-2 and Pythia (both pre-norm). Post-norm
 architectures (PaLM, early BERT) may show different patterns — theory
