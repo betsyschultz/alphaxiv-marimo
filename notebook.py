@@ -88,6 +88,14 @@ def executive_summary(data, mo, np, plt):
 *8 fix approaches tested, validated on GPT-2 + LLaMA-3.2-1B + Pythia-70M,
 and a method that works — all interactive below.*
 
+*This notebook empirically investigates the theory in Ran-Milo's
+["Attention Sinks Are Provably Necessary"](https://alphaxiv.org/abs/2603.11487)
+(2026) — which proved that pre-norm transformers mathematically require
+attention sinks for representational stability. Building on the sink token
+concept introduced by [Xiao et al.](https://alphaxiv.org/abs/2309.17453)
+(StreamingLLM, 2023), I test whether sinks can be removed, retrained, or
+improved.*
+
 Language models decide what each word means by looking at the words around
 it. But GPT-2 wastes over **44% of that attention** staring at the first
 word — regardless of what the first word is. That's an attention sink.
@@ -100,7 +108,7 @@ it into a **garbage bin**.
 
 I tested 8 ways to fix this. None worked — the model *needs* the garbage
 bin. But I found that training a better one (768 numbers, 2 minutes)
-**makes GPT-2 19.7% better and LLaMA-3.2-1B 26.7% better at predicting language.** Same tokens placed at the end? 0% improvement on both
+**makes GPT-2 19.7% better** (perplexity 44.5 → 35.7) **and LLaMA-3.2-1B 26.7% better** (16.95 → 12.43) **at predicting language.** Same tokens placed at the end? 0% improvement on both
 models. The effect is entirely about the garbage bin position.
 """),
             _fig_bar,
@@ -112,11 +120,13 @@ models. The effect is entirely about the garbage bin position.
             mo.accordion({
                 "Methodology note": mo.md("""
 Training used λ_align = 0.1 (alignment loss weighted at 10% of
-language modeling loss) over 1,767 steps on WikiText-2. This is
-intentionally conservative — high enough to provide gradient signal
-without destroying language ability. The alignment loss barely moved
-(0.35 → 0.33) while LM loss dropped steadily, confirming the model
-*could* learn but attention patterns remained stable.
+language modeling loss) over 1,767 steps (~1 epoch of WikiText-2 at
+batch size 4). λ=0.1 was chosen as a conservative starting point —
+high enough to provide gradient signal without destroying language
+ability. I then swept λ across 0.1, 0.5, 1.0, and 10.0 (results in
+the λ sweep table below). The alignment loss barely moved (0.35 → 0.33)
+while LM loss dropped steadily, confirming the model *could* learn
+but attention patterns remained stable.
 """),
             }),
         ])
@@ -1297,11 +1307,10 @@ either way. And more sinks didn't hurt quality — perplexity *improved*.
 A better model has more specialized workers, more idle time, and more need
 for a garbage bin. The bin gets busier as the model gets smarter.
 
-This empirically confirms Ran-Milo's *"Attention Sinks Are
-Provably Necessary"*
-([2026](https://alphaxiv.org/abs/2603.11487)) —
-pre-norm transformers mathematically require sinks for representational
-stability.
+This empirically confirms the central claim of
+[Ran-Milo (2026)](https://alphaxiv.org/abs/2603.11487) — the primary paper
+this notebook investigates — that pre-norm transformers mathematically
+require sinks for representational stability.
 
 ### The one thing that worked: a better garbage bin
 
@@ -1849,12 +1858,17 @@ or do new sinks emerge at other positions?
 from scratch produce healthier attention than retrofitting a sink token?
 """),
                 "References": mo.md("""
-- [Attention Sinks](https://alphaxiv.org/abs/2309.17453) (Xiao et al., 2023)
+**Primary paper this notebook investigates:**
+- [Attention Sinks Are Provably Necessary](https://alphaxiv.org/abs/2603.11487) (Ran-Milo, 2026) — proves pre-norm transformers mathematically require sinks for representational stability. This notebook empirically tests that claim.
+
+**Other references:**
+- [Efficient Streaming Language Models with Attention Sinks](https://alphaxiv.org/abs/2309.17453) (Xiao et al., 2023) — introduced the sink token concept and StreamingLLM
 - [The Spike, the Sparse and the Sink](https://alphaxiv.org/abs/2603.05498) (Sun et al., LeCun/NYU)
-- [Attention Sinks Are Provably Necessary](https://alphaxiv.org/abs/2603.11487) (Ran-Milo, 2026)
 - [Exclusive Self Attention](https://alphaxiv.org/abs/2603.09078) (Zhai, 2026)
 - [Fast KV Compaction via Attention Matching](https://alphaxiv.org/abs/2602.16284) (Zweiger et al.)
 - [Register Tokens in Vision Transformers](https://alphaxiv.org/abs/2309.16588) (Darcet et al., 2024)
+
+*[Full reading list on alphaXiv](https://www.alphaxiv.org/shared/folder/019d4c1f-46d6-7aa6-8836-3856837453c6)*
 """),
             }),
             mo.md("""
@@ -1918,6 +1932,10 @@ to lose.
 **Limitation:** Validated on GPT-2, Pythia-70M, and LLaMA-3.2-1B (all
 pre-norm). Post-norm architectures (PaLM, early BERT) may show different
 patterns — theory predicts reduced sinks, but this remains an open question.
+Learned sink tokens were trained on WikiText-2 — domain transfer to
+specialized text (code, medical, conversational) is untested. The
+improvement likely holds (sinks are architectural, not domain-specific)
+but the magnitude may vary.
 
 ---
 """),
