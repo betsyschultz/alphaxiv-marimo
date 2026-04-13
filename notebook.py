@@ -70,7 +70,7 @@ def executive_summary(data, mo, np, plt):
     _ax.set_xticks(_x)
     _ax.set_xticklabels(_approaches, fontsize=8)
     _ax.set_ylabel("Attention waste on position 0 (%)", fontsize=11)
-    _ax.set_title("Everything I Tried", fontsize=14, fontweight="bold")
+    _ax.set_title("Sink Waste: 8 Attempts to Remove It", fontsize=14, fontweight="bold")
     _ax.set_ylim(0, 65)
     _ax.grid(True, alpha=0.15, axis="y")
     _ax.axhline(y=44.3, color="#e74c3c", linestyle="--", alpha=0.3, linewidth=1)
@@ -93,15 +93,15 @@ GPT-2 wastes over **44% of its attention** staring at the first word —
 regardless of what that word is. Every attention head must point somewhere,
 so idle heads dump on position 0. That's an attention sink: a garbage bin.
 
-I tested 8 ways to fix this — training (λ = how hard the cleanup is
-pushed), redistribution, architectural tweaks — across GPT-2,
-LLaMA-3.2-1B, and Pythia-70M. Seven failed. The eighth revealed
-something useful: sinks are necessary but the *default* sink is
-suboptimal. A purpose-built one (4 learned embeddings, model frozen)
-improves perplexity **19.7%** on GPT-2 and **26.7%** on LLaMA — and
-the same tokens at the *end* of the sequence do nothing, proving this
-is about the garbage bin, not prompt tuning. Pythia confirmed it from
-below: too shallow for sinks, but the highest rate of sick heads.
+I tested 8 ways to remove sinks — training with alignment pressure (λ = how
+hard the cleanup is pushed), redistribution, architectural tweaks — across
+GPT-2, LLaMA-3.2-1B, and Pythia-70M. **All 8 failed.** Then I changed the
+question: instead of removing the garbage bin, I built a better one.
+**My extension:** 4 learned embeddings (model frozen) that improve perplexity
+**19.7%** on GPT-2 and **26.7%** on LLaMA. The same tokens at the *end* of
+the sequence do nothing (0.0% improvement), proving this is about the garbage
+bin, not prompt tuning. Pythia confirmed the mechanism from below: too shallow
+for sinks, but the highest rate of sick heads.
 """),
             _fig_bar,
         ])
@@ -1351,12 +1351,12 @@ transformers mathematically require sinks for representational stability.
                 ]),
             }),
             mo.md("""
-### Necessity ≠ optimality: building a better garbage bin
+### Novel extension: building a better garbage bin
 
 Sinks can't be removed — but the default sink (whatever random word
-starts the sequence) is suboptimal. I trained a purpose-built sink:
-a single embedding vector (768 parameters, model frozen) optimized
-to absorb garbage attention cleanly.
+starts the sequence) is suboptimal. **My extension:** train a
+purpose-built sink — 4 learned embedding vectors (3,072 parameters,
+model frozen) optimized to absorb garbage attention cleanly.
 """),
             mo.hstack([
                 mo.stat(value="-19.7%", label="GPT-2 improvement", bordered=True),
@@ -1539,9 +1539,10 @@ not just at n=30, but everywhere along the curve.
 ## The Ablation Test
 
 If the garbage bin is just a parking spot, what happens when you remove it?
-I shut off {_n_sink} garbage-bin heads completely, then did the same to
-{_n_sink} random working heads and {_n_diffuse} high-performing heads for
-comparison.
+I identified {_n_sink} garbage-bin heads (the "sick" heads from the entropy
+analysis — below 70% of median entropy) and zeroed their outputs completely.
+Then I did the same to {_n_sink} random working heads and {_n_diffuse}
+high-entropy "noisy" heads for comparison.
 """),
             _fig_abl,
             mo.hstack([
@@ -1758,6 +1759,11 @@ def try_controls(mo):
 
 Paste any text and see where GPT-2's attention goes. Does the sink
 still dominate? Pick an example or paste your own.
+
+**What to look for:** The sink pattern should hold regardless of content —
+try code vs. prose vs. a grocery list. Notice how the first token always
+absorbs disproportionate attention in deeper layers, even when the content
+is completely different.
 
 *First use may take a moment to load the model (CPU inference). All
 attention data above is precomputed.*
