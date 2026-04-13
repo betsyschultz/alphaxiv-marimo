@@ -1,0 +1,47 @@
+{
+  "baseline": 44.4578,
+  "experiments": [
+    {
+      "n_tokens": 1,
+      "position": "start",
+      "ppl": 41.8156,
+      "improvement_pct": 5.94,
+      "time_s": 833.1
+    },
+    {
+      "n_tokens": 1,
+      "position": "end",
+      "ppl": 44.4578,
+      "improvement_pct": 0.0,
+      "time_s": 1139.3
+    },
+    {
+      "n_tokens": 2,
+      "position": "start",
+      "ppl": 37.8562,
+      "improvement_pct": 14.85,
+      "time_s": 839.0
+    },
+    {
+      "n_tokens": 2,
+      "position": "end",
+      "ppl": 44.4578,
+      "improvement_pct": -0.0,
+      "time_s": 616.5
+    },
+    {
+      "n_tokens": 4,
+      "position": "start",
+      "ppl": 35.7135,
+      "improvement_pct": 19.67,
+      "time_s": 566.0
+    },
+    {
+      "n_tokens": 4,
+      "position": "end",
+      "ppl": 44.4578,
+      "improvement_pct": 0.0,
+      "time_s": 573.2
+    }
+  ]
+}
