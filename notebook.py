@@ -88,13 +88,12 @@ def executive_summary(data, mo, np, plt):
 *8 fix approaches tested, validated on GPT-2 + LLaMA-3.2-1B + Pythia-70M,
 and a method that works — all interactive below.*
 
-*This notebook empirically investigates the theory in Ran-Milo's
-["Attention Sinks Are Provably Necessary"](https://alphaxiv.org/abs/2603.11487)
-(2026) — which proved that pre-norm transformers mathematically require
-attention sinks for representational stability. Building on the sink token
-concept introduced by [Xiao et al.](https://alphaxiv.org/abs/2309.17453)
-(StreamingLLM, 2023), I test whether sinks can be removed, retrained, or
-improved.*
+*This notebook empirically investigates
+[Ran-Milo (2026)](https://alphaxiv.org/abs/2603.11487), which proved that
+pre-norm transformers mathematically require attention sinks for
+representational stability. Building on the sink token concept from
+[Xiao et al. (2023)](https://alphaxiv.org/abs/2309.17453), I test whether
+sinks can be removed, retrained, or improved.*
 
 GPT-2 wastes over **44% of its attention** staring at the first word —
 regardless of what that word is. Every attention head must point somewhere,
@@ -570,9 +569,10 @@ def hook_viz(data, mo, np, plt, hook_layer):
                 w = float(avg[qi, ki])
                 if w < 0.02:
                     continue
-                opacity = min(w * 3, 0.9)
-                stroke_w = max(w * 12, 0.5)
-                color = "#e74c3c" if ki == 0 else "#3498db"
+                is_sink = ki == 0
+                opacity = min(w * 1.5, 0.5) if is_sink else max(min(w * 4, 0.7), 0.15)
+                stroke_w = max(w * 4, 0.5) if is_sink else max(w * 8, 0.8)
+                color = "#e74c3c" if is_sink else "#3498db"
                 lines.append(
                     f'<line x1="{left_x+10}" y1="{qy}" x2="{right_x-10}" y2="{ky}" '
                     f'stroke="{color}" stroke-width="{stroke_w:.1f}" opacity="{opacity:.2f}"/>'
@@ -631,7 +631,7 @@ def hook_viz(data, mo, np, plt, hook_layer):
                 kind="neutral" if _status == "healthy" else "warn" if _status == "forming" else "danger",
             ),
             mo.accordion({
-                "Attention flow (interactive)": mo.Html(_build_flow_svg(
+                "Attention flow": mo.Html(_build_flow_svg(
                     data["standard_attn"][_layer], data["tokens"],
                 )),
                 "Input text": mo.md(f"*{data['text']}*"),
@@ -681,8 +681,8 @@ Two approaches that partially work:
 """),
             mo.accordion({
                 "What about blocking self-attention? (ESA)": mo.md("""
-[Exclusive Self Attention](https://alphaxiv.org/abs/2603.09078) (Zhai, 2026) blocks
-the diagonal — words can't look at themselves. I tested it: **no effect.**
+[Zhai (2026)](https://alphaxiv.org/abs/2603.09078) proposed Exclusive Self Attention,
+which blocks the diagonal — words can't look at themselves. I tested it: **no effect.**
 The garbage bin isn't caused by words looking at themselves. It's deeper —
 built into the model's architecture.
 """),
@@ -698,7 +698,7 @@ A sink token separates the roles. What this affects measurably:
 - **Perplexity improves slightly** when you train the sink embedding — the model performs better with a proper parking spot.
 (Perplexity measures how surprised the model is by the next word — lower = better. A perplexity of 30 means
 the model is as uncertain as choosing between 30 equally likely words.)
-- **Streaming inference** — the original use case from [Xiao et al.](https://alphaxiv.org/abs/2309.17453):
+- **Streaming inference** — the original use case from [Xiao et al. (2023)](https://alphaxiv.org/abs/2309.17453):
 keeping the sink token in the KV cache lets models process unlimited-length text without degrading
 """),
             }),
@@ -1330,7 +1330,7 @@ The improvement is *stronger* on LLaMA-1B (-26.7%) than GPT-2 (-19.7%),
 despite LLaMA using rotary embeddings. LLaMA also has higher sink waste
 (65.6% vs 44.3%) — more garbage to manage, more room for a better bin.
 
-This is not [soft prompting](https://alphaxiv.org/abs/2104.08691). Soft prompts
+This is not soft prompting ([Lester et al., 2021](https://alphaxiv.org/abs/2104.08691)). Soft prompts
 work regardless of position. These only work at the front, where the garbage
 collects.
 
@@ -1354,7 +1354,7 @@ for batch in dataloader:
     out.loss.backward()
     optimizer.step()  # only updates sink_embed
 ```
-*500 steps on WikiText-2, AdamW lr=1e-3. Full script: `train_learned_sink.py`*
+*500 steps on WikiText-2, AdamW lr=1e-3. Full script: [`train_learned_sink.py`](https://github.com/betsyschultz/alphaxiv-marimo/blob/main/train_learned_sink.py)*
 """),
             }),
         ])
@@ -1812,7 +1812,7 @@ Three architectures, three different sink profiles:
 Pythia-70M is the outlier. Its final two layers have every head at zero
 entropy — maximally focused, but not on position 0. With only 6 layers,
 the sink pattern doesn't develop. But LLaMA — also using
-[rotary embeddings](https://alphaxiv.org/abs/2104.09864), but with 16
+rotary embeddings ([Su et al., 2021](https://alphaxiv.org/abs/2104.09864)), but with 16
 layers — sinks *more* than GPT-2. Depth matters more than position
 encoding.
 
@@ -1833,21 +1833,8 @@ different sink patterns than dense models?
 attention for task-specific reasoning, does sink magnitude drop?
 - **Longer contexts** — at 4K, 32K, 128K context lengths, does the sink token at position 0 still dominate,
 or do new sinks emerge at other positions?
-- **Vision transformers** — Darcet et al. added explicit register tokens. Does training with registers
+- **Vision transformers** — [Darcet et al. (2024)](https://alphaxiv.org/abs/2309.16588) added explicit register tokens. Does training with registers
 from scratch produce healthier attention than retrofitting a sink token?
-"""),
-                "References": mo.md("""
-**Primary paper this notebook investigates:**
-- [Attention Sinks Are Provably Necessary](https://alphaxiv.org/abs/2603.11487) (Ran-Milo, 2026) — proves pre-norm transformers mathematically require sinks for representational stability. This notebook empirically tests that claim.
-
-**Other references:**
-- [Efficient Streaming Language Models with Attention Sinks](https://alphaxiv.org/abs/2309.17453) (Xiao et al., 2023) — introduced the sink token concept and StreamingLLM
-- [The Spike, the Sparse and the Sink](https://alphaxiv.org/abs/2603.05498) (Sun et al., LeCun/NYU)
-- [Exclusive Self Attention](https://alphaxiv.org/abs/2603.09078) (Zhai, 2026)
-- [Fast KV Compaction via Attention Matching](https://alphaxiv.org/abs/2602.16284) (Zweiger et al.)
-- [Register Tokens in Vision Transformers](https://alphaxiv.org/abs/2309.16588) (Darcet et al., 2024)
-
-*[Full reading list on alphaXiv](https://www.alphaxiv.org/shared/folder/019d4c1f-46d6-7aa6-8836-3856837453c6)*
 """),
             }),
             mo.md("""
@@ -1875,7 +1862,7 @@ the end: 0.0%. ~10 minutes of training, free at inference.
 
 **2. Never evict position 0 from your KV cache.** It's the most-attended
 position — losing it degrades every downstream prediction
-([Zweiger et al.](https://alphaxiv.org/abs/2602.16284)).
+([Zweiger et al., 2026](https://alphaxiv.org/abs/2602.16284)).
 
 **3. Filter position 0 from attention maps.** 44-66% of attention weight
 is structural parking, not meaningful signal.
@@ -1890,6 +1877,23 @@ you can't lose.
 ---
 """),
             _download_btn,
+            mo.md("""
+---
+
+## References
+
+**Primary paper:**
+- Ran-Milo (2026). [Attention Sinks Are Provably Necessary](https://alphaxiv.org/abs/2603.11487). This notebook empirically tests that claim.
+
+**Other references:**
+- Darcet, T., et al. (2024). [Register Tokens in Vision Transformers](https://alphaxiv.org/abs/2309.16588).
+- Lester, B., et al. (2021). [The Power of Scale for Parameter-Efficient Prompt Tuning](https://alphaxiv.org/abs/2104.08691).
+- Su, J., et al. (2021). [RoFormer: Enhanced Transformer with Rotary Position Embedding](https://alphaxiv.org/abs/2104.09864).
+- Sun, Z., et al. (2026). [The Spike, the Sparse and the Sink](https://alphaxiv.org/abs/2603.05498).
+- Xiao, G., et al. (2023). [Efficient Streaming Language Models with Attention Sinks](https://alphaxiv.org/abs/2309.17453).
+- Zhai, S. (2026). [Exclusive Self Attention](https://alphaxiv.org/abs/2603.09078).
+- Zweiger, A., et al. (2026). [Fast KV Compaction via Attention Matching](https://alphaxiv.org/abs/2602.16284).
+"""),
         ])
     )
 
