@@ -100,15 +100,15 @@ it into a **garbage bin**.
 
 I tested 8 ways to fix this. None worked — the model *needs* the garbage
 bin. But I found that training a better one (768 numbers, 2 minutes)
-**makes the model 19.7% better at predicting language.** Same tokens
-placed at the end? 0% improvement. The effect is entirely about the
-garbage bin position.
+**makes GPT-2 19.7% better at predicting language — and LLaMA-3.2-1B
+26.7% better.** Same tokens placed at the end? 0% improvement on both
+models. The effect is entirely about the garbage bin position.
 """),
             _fig_bar,
             mo.hstack([
-                mo.stat(value="-19.7%", label="better predictions from a better bin", bordered=True),
+                mo.stat(value="-26.7%", label="LLaMA-1B with a better bin", bordered=True),
                 mo.stat(value="29×", label="less critical than random heads", bordered=True),
-                mo.stat(value="3,072", label="numbers trained (of 124 million)", bordered=True),
+                mo.stat(value="8,192", label="numbers trained (of 1.2 billion)", bordered=True),
             ], justify="center", gap=1),
             mo.accordion({
                 "Methodology note": mo.md("""
@@ -1318,25 +1318,35 @@ separate the sink effect from generic prompt tuning.
                 mo.stat(value="0.0%", label="same tokens at the end", bordered=True),
             ], justify="center", gap=1),
             mo.md("""
-| Intervention | Params | PPL | Change | Position control |
-|-------------|--------|-----|--------|-----------------|
-| Baseline | 0 | 44.5 | — | — |
-| 1 learned token, **start** | 768 | 41.8 | **-5.9%** | — |
-| 1 learned token, end | 768 | 44.5 | **0.0%** | Not prompt tuning |
-| 2 learned tokens, **start** | 1,536 | 37.9 | **-14.9%** | — |
-| 2 learned tokens, end | 1,536 | 44.5 | **0.0%** | Not prompt tuning |
-| **4 learned tokens, start** | **3,072** | **35.7** | **-19.7%** | — |
-| 4 learned tokens, end | 3,072 | 44.5 | **0.0%** | Not prompt tuning |
-| Embedding offset (pos 0 only) | 768 | 42.1 | -5.3% | No extra tokens |
-| Attention bias (pos 0) | 12 | 45.1 | +1.5% | Can't change allocation |
+**GPT-2 (124M)**
 
-The position control is definitive: **tokens at the end do nothing.** The
-same learned tokens, same training, same evaluation — 0.0% improvement when
-placed at the end. The effect is entirely about the garbage bin at position 0.
+| Intervention | Params | PPL | Change | End position |
+|-------------|--------|-----|--------|-------------|
+| Baseline | 0 | 44.5 | — | — |
+| 1 token, start | 768 | 41.8 | -5.9% | 0.0% |
+| **4 tokens, start** | **3,072** | **35.7** | **-19.7%** | **0.0%** |
+| Embedding offset (pos 0 only) | 768 | 42.1 | -5.3% | — |
+| Attention bias (pos 0) | 12 | 45.1 | +1.5% | — |
+
+**LLaMA-3.2-1B (1.2B)**
+
+| Intervention | Params | PPL | Change | End position |
+|-------------|--------|-----|--------|-------------|
+| Baseline | 0 | 16.95 | — | — |
+| 1 token, start | 2,048 | 13.49 | **-20.4%** | **0.0%** |
+| **4 tokens, start** | **8,192** | **12.43** | **-26.7%** | **0.0%** |
+
+The position control is definitive across both models: **tokens at the end
+do nothing.** 0.0% improvement — same tokens, same training. The effect is
+entirely about the garbage bin at position 0.
+
+The improvement is *stronger* on LLaMA-1B (-26.7%) than GPT-2 (-19.7%),
+despite LLaMA using rotary embeddings. LLaMA also has higher sink waste
+(65.6% vs 44.3%) — more garbage to manage, more room for a better bin.
 
 This is not [soft prompting](https://alphaxiv.org/abs/2104.08691). Soft prompts
 work regardless of position. These only work at the front, where the garbage
-collects. The learned tokens are purpose-built bins, not generic context.
+collects.
 
 Sinks didn't decrease — they stayed at ~41%. But the model got better at
 language because its first real token is no longer corrupted. The OFF switch
