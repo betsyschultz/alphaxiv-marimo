@@ -85,7 +85,7 @@ def executive_summary(data, mo, np, plt):
 [Ran-Milo (2026)](https://alphaxiv.org/abs/2603.11487), which proved that
 pre-norm transformers mathematically require attention sinks for
 representational stability. Building on the sink token concept from
-[Xiao et al. (2023)](https://alphaxiv.org/abs/2309.17453), I test whether
+[Xiao et al. (2024)](https://alphaxiv.org/abs/2309.17453), I test whether
 sinks can be removed, retrained, or improved — validated across GPT-2 +
 LLaMA-3.2-1B + Pythia-70M.*
 
@@ -702,7 +702,7 @@ A sink token separates the roles. What this affects measurably:
 - **Perplexity improves slightly** when you train the sink embedding — the model performs better with a proper parking spot.
 (Perplexity measures how surprised the model is by the next word — lower = better. A perplexity of 30 means
 the model is as uncertain as choosing between 30 equally likely words.)
-- **Streaming inference** — the original use case from [Xiao et al. (2023)](https://alphaxiv.org/abs/2309.17453):
+- **Streaming inference** — the original use case from [Xiao et al. (2024)](https://alphaxiv.org/abs/2309.17453):
 keeping the sink token in the KV cache lets models process unlimited-length text without degrading
 """),
             }),
@@ -2127,7 +2127,7 @@ you can't lose.
 - Lester, B., et al. (2021). [The Power of Scale for Parameter-Efficient Prompt Tuning](https://alphaxiv.org/abs/2104.08691).
 - Su, J., et al. (2021). [RoFormer: Enhanced Transformer with Rotary Position Embedding](https://alphaxiv.org/abs/2104.09864).
 - Sun, Z., et al. (2026). [The Spike, the Sparse and the Sink](https://alphaxiv.org/abs/2603.05498).
-- Xiao, G., et al. (2023). [Efficient Streaming Language Models with Attention Sinks](https://alphaxiv.org/abs/2309.17453).
+- Xiao, G., et al. (2024). [Efficient Streaming Language Models with Attention Sinks](https://alphaxiv.org/abs/2309.17453).
 - Zhai, S. (2026). [Exclusive Self Attention](https://alphaxiv.org/abs/2603.09078).
 - Duvvuri, S. S., et al. (2026). [Interleaved Head Attention](https://alphaxiv.org/abs/2602.21371).
 - Zweiger, A., et al. (2026). [Fast KV Compaction via Attention Matching](https://alphaxiv.org/abs/2602.16284).
