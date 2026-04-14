@@ -1791,14 +1791,13 @@ def try_controls(example_picker, mo):
 @app.cell(hide_code=True)
 def try_viz(gpt2_loader, mo, np, plt, custom_text):
     _text = custom_text.value.strip()
-    if not _text:
-        mo.output.replace(
-            mo.callout(
-                mo.md("*Type or paste text above to analyze its attention pattern.*"),
-                kind="neutral",
-            )
-        )
-        return
+    mo.stop(
+        not _text,
+        mo.callout(
+            mo.md("*Type or paste text above to analyze its attention pattern.*"),
+            kind="neutral",
+        ),
+    )
 
     import torch
 
