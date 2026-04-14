@@ -167,6 +167,7 @@ def precompute():
     _dir = os.path.dirname(os.path.abspath(__file__))
     _cache_path = os.path.join(_dir, "precomputed_cache.npz")
     _text_hash = hashlib.md5(_TEXT.encode()).hexdigest()[:12]
+    _CACHE_URL = "https://raw.githubusercontent.com/betsyschultz/alphaxiv-marimo/main/precomputed_cache.npz"
 
     # --- Helpers ---
     def _entropy(attn_4d):
@@ -176,7 +177,19 @@ def precompute():
     def _sink_mag(attn_4d, col=0):
         return attn_4d[:, :, :, col].mean(axis=(1, 2))
 
-    # --- Try loading from cache ---
+    def _recompute_esa(std_attn):
+        """Recompute ESA from standard attention (~1ms)."""
+        _esa = std_attn.copy()
+        for _li in range(_esa.shape[0]):
+            for _hi in range(_esa.shape[1]):
+                _a = _esa[_li, _hi].copy()
+                np.fill_diagonal(_a, 0.0)
+                _rs = _a.sum(axis=-1, keepdims=True)
+                _rs = np.where(_rs == 0, 1.0, _rs)
+                _esa[_li, _hi] = _a / _rs
+        return _esa
+
+    # --- Try loading from cache (local, then GitHub) ---
     _from_cache = False
     if os.path.exists(_cache_path):
         try:
@@ -186,12 +199,24 @@ def precompute():
         except Exception:
             pass
 
+    if not _from_cache:
+        try:
+            import urllib.request as _urllib
+            import io as _io
+            with mo.status.spinner("Downloading precomputed data..."):
+                _resp = _urllib.urlopen(_CACHE_URL)
+                _cached = np.load(_io.BytesIO(_resp.read()), allow_pickle=True)
+                if _cached["text_hash"].item() == _text_hash:
+                    _from_cache = True
+        except Exception:
+            pass
+
     if _from_cache:
         with mo.status.spinner("Loading from cache..."):
-            _standard_attn = _cached["standard_attn"]
-            _esa_attn = _cached["esa_attn"]
-            _raw_scores_all = _cached["raw_scores_all"]
-            _sink_attn_full = _cached["sink_attn_full"]
+            _standard_attn = np.float32(_cached["standard_attn"])
+            _raw_scores_all = np.float32(_cached["raw_scores_all"])
+            _sink_attn_full = np.float32(_cached["sink_attn_full"])
+            _esa_attn = _recompute_esa(_standard_attn)
             _tokens = list(_cached["tokens"])
             _seq_len = int(_cached["seq_len"])
             _n_layers = int(_cached["n_layers"])
@@ -384,14 +409,16 @@ def precompute():
                 "adaptive_ppl": round(_adapt_adp_ppl, 2),
             }
 
-            # --- Save cache (compact — no temp sweep) ---
+            # --- Recompute ESA (dropped from cache to save space) ---
+            _esa_attn = _recompute_esa(_standard_attn)
+
+            # --- Save cache (compact — float16, no ESA) ---
             _status.update("Saving cache...")
             np.savez_compressed(_cache_path, **{
                 "text_hash": _text_hash,
-                "standard_attn": _standard_attn,
-                "esa_attn": _esa_attn,
-                "raw_scores_all": _raw_scores_all,
-                "sink_attn_full": _sink_attn_full,
+                "standard_attn": _standard_attn.astype(np.float16),
+                "raw_scores_all": _raw_scores_all.astype(np.float16),
+                "sink_attn_full": _sink_attn_full.astype(np.float16),
                 "tokens": np.array(_tokens, dtype=object),
                 "seq_len": _seq_len,
                 "n_layers": _n_layers,
