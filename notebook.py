@@ -1799,7 +1799,7 @@ def try_viz(gpt2_loader, mo, np, plt, custom_text):
         ),
     )
 
-    import torch
+    import torch as _torch
 
     _model, _tokenizer = gpt2_loader.get()
 
@@ -1810,7 +1810,7 @@ def try_viz(gpt2_loader, mo, np, plt, custom_text):
         _seq = _inputs["input_ids"].shape[1]
         _toks = [_tokenizer.decode(t) for t in _inputs["input_ids"][0]]
 
-        with torch.no_grad():
+        with _torch.no_grad():
             _out = _model(**_inputs, output_attentions=True)
 
         _attn = np.stack([l[0].numpy() for l in _out.attentions])
